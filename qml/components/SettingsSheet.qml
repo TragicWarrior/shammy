@@ -34,6 +34,7 @@ Popup {
         property bool showArtifactInsights: false
         property bool rememberNavigatorState: false
         property bool enableArtifacts: true
+        property bool includeLocalTime: true
         property string officeBinaryPath: ""
         property int compactionThreshold: 80
         property bool vision: false
@@ -59,6 +60,7 @@ Popup {
         draft.showArtifactInsights = settings.showArtifactInsights
         draft.rememberNavigatorState = settings.rememberNavigatorState
         draft.enableArtifacts = settings.enableArtifacts
+        draft.includeLocalTime = settings.includeLocalTime
         draft.officeBinaryPath = settings.officeBinaryPath
         if (officePathField)
             officePathField.text = draft.officeBinaryPath
@@ -100,6 +102,7 @@ Popup {
         settings.showArtifactInsights = draft.showArtifactInsights
         settings.rememberNavigatorState = draft.rememberNavigatorState
         settings.enableArtifacts = draft.enableArtifacts
+        settings.includeLocalTime = draft.includeLocalTime
         settings.officeBinaryPath = draft.officeBinaryPath
         settings.compactionThreshold = draft.compactionThreshold
         settings.webSearchEnabled = draft.webSearchEnabled
@@ -1025,6 +1028,25 @@ Popup {
                                 help: "Extract standalone documents and code into a side pane."
                                 checked: draft.enableArtifacts
                                 onToggled: draft.enableArtifacts = !draft.enableArtifacts
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 24
+                            Layout.rightMargin: 24
+                            radius: 12
+                            color: Theme.panel
+                            implicitHeight: timeRow.height + 24
+                            SettingsToggleRow {
+                                id: timeRow
+                                x: 16
+                                y: 12
+                                width: parent.width - 32
+                                title: "Include local date and time"
+                                help: "Tell the model the current weekday, date, time, and timezone from this computer. Recalculated on every reply."
+                                checked: draft.includeLocalTime
+                                onToggled: draft.includeLocalTime = !draft.includeLocalTime
                             }
                         }
 

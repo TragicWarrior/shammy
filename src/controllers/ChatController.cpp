@@ -25,7 +25,10 @@
 #include <QVariantMap>
 #include <QMimeData>
 #include <QMimeDatabase>
+#include <QDateTime>
+#include <QLocale>
 #include <QStringList>
+#include <QTimeZone>
 #include <QUrl>
 #include <QVariant>
 
@@ -34,6 +37,30 @@ static const char *kSystem = R"(You are Shammy, a local desktop assistant talkin
 If tools are provided, call them instead of describing what they would do. Do not invent tool results.
 When web_fetch is listed, use it to read a URL the user shares (README, docs, article). Do not say you cannot browse.
 When web_search is listed, use it for open-ended live questions without a specific URL.)";
+
+static QString localTimePromptLine()
+{
+    const QDateTime now = QDateTime::currentDateTime();
+    const QTimeZone tz = QTimeZone::systemTimeZone();
+    const QString iana = QString::fromUtf8(tz.id());
+    const int secs = tz.offsetFromUtc(now);
+    const QChar sign = secs >= 0 ? QLatin1Char('+') : QLatin1Char('-');
+    const int abs = qAbs(secs);
+    const QString off = QStringLiteral("%1%2:%3")
+                            .arg(sign)
+                            .arg(abs / 3600, 2, 10, QLatin1Char('0'))
+                            .arg((abs % 3600) / 60, 2, 10, QLatin1Char('0'));
+    const QLocale en(QLocale::English, QLocale::UnitedStates);
+    const QString stamp = en.toString(now, QStringLiteral("dddd, dd MMMM yyyy, HH:mm"));
+    QString zone = iana;
+    const QString abbr = tz.abbreviation(now);
+    if (!abbr.isEmpty() && abbr != iana)
+        zone += QStringLiteral(", %1").arg(abbr);
+    zone += QStringLiteral(", UTC%1").arg(off);
+    return QStringLiteral(
+               "The user's local date and time is %1 (%2). Treat this as today unless they say otherwise.")
+        .arg(stamp, zone);
+}
 
 static const char *kArtifactInstructions = R"(
 When you produce a substantial standalone document, UI, diagram, or code file the user may want to keep or iterate on, wrap it in:
@@ -788,6 +815,8 @@ void ChatController::beginAssistant()
 QString ChatController::systemPrompt() const
 {
     QString s = QString::fromUtf8(kSystem);
+    if (m_settings->includeLocalTime())
+        s += QLatin1Char('\n') + localTimePromptLine();
     if (m_settings->enableArtifacts())
         s += QString::fromUtf8(kArtifactInstructions);
     if (m_forceFinalWrite)

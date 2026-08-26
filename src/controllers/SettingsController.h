@@ -32,6 +32,7 @@ class SettingsController : public QObject
     Q_PROPERTY(bool navFavoritesOpen READ navFavoritesOpen WRITE setNavFavoritesOpen NOTIFY navigatorStateChanged)
     Q_PROPERTY(bool navChatsOpen READ navChatsOpen WRITE setNavChatsOpen NOTIFY navigatorStateChanged)
     Q_PROPERTY(bool enableArtifacts READ enableArtifacts WRITE setEnableArtifacts NOTIFY enableArtifactsChanged)
+    Q_PROPERTY(bool includeLocalTime READ includeLocalTime WRITE setIncludeLocalTime NOTIFY includeLocalTimeChanged)
     Q_PROPERTY(QString officeBinaryPath READ officeBinaryPath WRITE setOfficeBinaryPath NOTIFY officeBinaryPathChanged)
     Q_PROPERTY(QString officeDetectedPath READ officeDetectedPath CONSTANT)
     Q_PROPERTY(int compactionThreshold READ compactionThreshold WRITE setCompactionThreshold NOTIFY compactionThresholdChanged)
@@ -97,6 +98,8 @@ public:
     void setNavChatsOpen(bool v);
     bool enableArtifacts() const { return m_enableArtifacts; }
     void setEnableArtifacts(bool v);
+    bool includeLocalTime() const { return m_includeLocalTime; }
+    void setIncludeLocalTime(bool v);
     QString officeBinaryPath() const { return m_officeBinaryPath; }
     void setOfficeBinaryPath(const QString &p);
     QString officeDetectedPath() const;
@@ -151,6 +154,7 @@ signals:
     void rememberNavigatorStateChanged();
     void navigatorStateChanged();
     void enableArtifactsChanged();
+    void includeLocalTimeChanged();
     void officeBinaryPathChanged();
     void compactionThresholdChanged();
     void modelsErrorChanged();
@@ -190,6 +194,7 @@ private:
     bool m_navFavoritesOpen = false;
     bool m_navChatsOpen = false;
     bool m_enableArtifacts = true;
+    bool m_includeLocalTime = true;
     QString m_officeBinaryPath;
     int m_compactionThreshold = 80;
     QString m_modelsError;
