@@ -62,6 +62,19 @@ ApplicationWindow {
         Item {
             SplitView.fillWidth: true
 
+            DropArea {
+                id: chatDrop
+                anchors.fill: parent
+                enabled: projects.pane === "chat"
+                keys: ["text/uri-list"]
+                onDropped: function(drop) {
+                    if (!drop.hasUrls)
+                        return
+                    for (let i = 0; i < drop.urls.length; ++i)
+                        chat.attachFile(drop.urls[i])
+                    drop.acceptProposedAction()
+                }
+
             ColumnLayout {
                 anchors.fill: parent
                 spacing: 0
@@ -235,6 +248,36 @@ ApplicationWindow {
                     }
                 }
             }
+
+            Rectangle {
+                anchors.fill: parent
+                visible: projects.pane === "chat" && (chat.fileDropHover || chatDrop.containsDrag)
+                enabled: false
+                z: 30
+                color: Theme.bg
+                opacity: 0.72
+            }
+            Rectangle {
+                visible: projects.pane === "chat" && (chat.fileDropHover || chatDrop.containsDrag)
+                enabled: false
+                z: 31
+                anchors.centerIn: parent
+                width: Math.min(Theme.chatMaxWidth, parent.width - 48)
+                height: dropHint.implicitHeight + 32
+                radius: Theme.radiusLg
+                color: Theme.panel
+                border.color: Theme.border
+                border.width: 1
+                Text {
+                    id: dropHint
+                    anchors.centerIn: parent
+                    text: "Drop files to attach"
+                    color: Theme.text
+                    font.pixelSize: 16
+                    font.weight: Font.DemiBold
+                }
+            }
+            } // DropArea
         }
 
         ArtifactPane {

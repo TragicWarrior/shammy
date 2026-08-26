@@ -45,6 +45,8 @@ set(CORE_SOURCES
     src/artifacts/DocxExport.h
     src/artifacts/SpreadsheetExtract.cpp
     src/artifacts/SpreadsheetExtract.h
+    src/artifacts/Attach.cpp
+    src/artifacts/Attach.h
     src/mcp/JsonRpc.cpp
     src/mcp/JsonRpc.h
     src/mcp/McpClient.cpp
