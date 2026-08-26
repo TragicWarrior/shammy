@@ -66,7 +66,7 @@ void McpClient::start()
          QJsonObject
          {
              {QStringLiteral("name"), QStringLiteral("shammy")},
-             {QStringLiteral("version"), QStringLiteral("0.1.0")},
+             {QStringLiteral("version"), QStringLiteral(SHAMMY_VERSION)},
          }},
     };
     send(JsonRpc::encodeRequest(1, QStringLiteral("initialize"), params));

@@ -17,7 +17,7 @@ Popup {
     }
 
     property int category: 0
-    readonly property var categories: ["General", "Models", "MCP", "Advanced"]
+    readonly property var categories: ["General", "Models", "MCP", "Advanced", "About"]
 
     ListModel { id: draftBackends }
     ListModel { id: draftMcp }
@@ -1214,6 +1214,77 @@ Popup {
                                     }
                                     color: officeCol.resolved.length ? Theme.muted : Theme.danger
                                     font.pixelSize: 12
+                                    wrapMode: Text.Wrap
+                                    Layout.fillWidth: true
+                                }
+                            }
+                        }
+
+                        Item { Layout.preferredHeight: 20 }
+                    }
+                }
+
+                // 4 — About
+                ScrollView {
+                    clip: true
+                    contentWidth: availableWidth
+                    ColumnLayout {
+                        width: Math.max(240, root.width - 250)
+                        spacing: 8
+
+                        Item { Layout.preferredHeight: 8 }
+
+                        Text {
+                            text: "About"
+                            color: Theme.text
+                            font.pixelSize: 15
+                            font.weight: Font.DemiBold
+                            Layout.leftMargin: 24
+                        }
+                        Text {
+                            text: "Version, license, and copyright for this build of Shammy."
+                            color: Theme.muted
+                            font.pixelSize: 12
+                            wrapMode: Text.Wrap
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 24
+                            Layout.rightMargin: 24
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 24
+                            Layout.rightMargin: 24
+                            radius: 12
+                            color: Theme.panel
+                            implicitHeight: aboutCol.height + 24
+                            ColumnLayout {
+                                id: aboutCol
+                                x: 16
+                                y: 12
+                                width: parent.width - 32
+                                spacing: 10
+                                Text {
+                                    textFormat: Text.StyledText
+                                    text: "<font color=\"#22c55e\">☘</font> Shammy"
+                                    color: Theme.text
+                                    font.pixelSize: 16
+                                    font.weight: Font.DemiBold
+                                }
+                                Text {
+                                    text: "Version " + Qt.application.version
+                                    color: Theme.text
+                                    font.pixelSize: 14
+                                }
+                                Text {
+                                    text: "MIT License"
+                                    color: Theme.muted
+                                    font.pixelSize: 13
+                                }
+                                Text {
+                                    text: "Copyright (c) 2026 Shammy contributors"
+                                    color: Theme.muted
+                                    font.pixelSize: 13
                                     wrapMode: Text.Wrap
                                     Layout.fillWidth: true
                                 }
