@@ -127,7 +127,7 @@ int main(int argc, char *argv[])
     app.setOrganizationDomain(QStringLiteral("shammy.local"));
     app.setApplicationName(QStringLiteral("shammy"));
     app.setApplicationDisplayName(QStringLiteral("Shammy"));
-    app.setApplicationVersion(QStringLiteral("0.1.0"));
+    app.setApplicationVersion(QStringLiteral(SHAMMY_VERSION));
     app.setDesktopFileName(QStringLiteral("shammy"));
     app.setWindowIcon(shammyIcon());
     migrateFromLlamaChat();
