@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Shammy
+Comment=Local OpenAI-compatible chat desktop client
+Exec=shammy
+Icon=shammy
+StartupWMClass=shammy
+Terminal=false
+Categories=Utility;Development;
+StartupNotify=true
