@@ -23,6 +23,7 @@ SettingsController::SettingsController(Store *store, OpenAiClient *client, QObje
     m_navFavoritesOpen = m_qs.value(QStringLiteral("navFavoritesOpen"), false).toBool();
     m_navChatsOpen = m_qs.value(QStringLiteral("navChatsOpen"), false).toBool();
     m_enableArtifacts = m_qs.value(QStringLiteral("enableArtifacts"), true).toBool();
+    m_includeLocalTime = m_qs.value(QStringLiteral("includeLocalTime"), true).toBool();
     m_officeBinaryPath = m_qs.value(QStringLiteral("officeBinaryPath")).toString().trimmed();
     m_compactionThreshold = Compact::clampThreshold(
         m_qs.value(QStringLiteral("compactionThreshold"), Compact::kDefaultThresholdPct).toInt());
@@ -387,6 +388,12 @@ void SettingsController::setEnableArtifacts(bool v)
 {
     setBoolPref(&m_enableArtifacts, QStringLiteral("enableArtifacts"), v,
                 &SettingsController::enableArtifactsChanged);
+}
+
+void SettingsController::setIncludeLocalTime(bool v)
+{
+    setBoolPref(&m_includeLocalTime, QStringLiteral("includeLocalTime"), v,
+                &SettingsController::includeLocalTimeChanged);
 }
 
 void SettingsController::setOfficeBinaryPath(const QString &p)

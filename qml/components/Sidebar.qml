@@ -9,6 +9,7 @@ Rectangle {
     property bool projectsOpen: false
     property bool favoritesOpen: false
     property bool chatsOpen: false
+    property bool navReady: false
     readonly property int favoritesListHeight: {
         if (!favoritesOpen || favList.count <= 0)
             return 0
@@ -16,7 +17,7 @@ Rectangle {
     }
 
     function persistNav() {
-        if (!settings.rememberNavigatorState)
+        if (!navReady || !settings.rememberNavigatorState)
             return
         settings.navProjectsOpen = projectsOpen
         settings.navFavoritesOpen = favoritesOpen
@@ -29,6 +30,7 @@ Rectangle {
             favoritesOpen = settings.navFavoritesOpen
             chatsOpen = settings.navChatsOpen
         }
+        navReady = true
     }
 
     onProjectsOpenChanged: persistNav()
@@ -643,8 +645,8 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: parent.left
                 anchors.leftMargin: 10
-                anchors.right: delBtn.left
-                anchors.rightMargin: 4
+                anchors.right: favBtn.left
+                anchors.rightMargin: 8
                 text: title.length ? title : "New chat"
                 color: Theme.text
                 elide: Text.ElideRight
@@ -655,9 +657,10 @@ Rectangle {
                 z: 1
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.right: delBtn.left
-                anchors.rightMargin: 2
+                anchors.rightMargin: 6
                 visible: convHover.containsMouse || pinned
-                width: visible ? implicitWidth : 0
+                width: visible ? 16 : 0
+                horizontalAlignment: Text.AlignHCenter
                 text: pinned ? "★" : "☆"
                 color: pinned ? Theme.text : Theme.muted
                 font.pixelSize: 14
