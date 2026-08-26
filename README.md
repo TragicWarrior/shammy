@@ -103,3 +103,7 @@ auto-detect misses your install. Interactive pages (JavaScript
 dashboards) flatten to a static document. Install with
 `sudo apt-get install libreoffice`. The artifact in Shammy stays HTML
 or markdown; Word is a download, not a second source of truth.
+
+## Contributing
+
+Bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
