@@ -30,12 +30,15 @@ SettingsController::SettingsController(Store *store, OpenAiClient *client, QObje
     m_topP = m_qs.value(QStringLiteral("topP"), 1.0).toDouble();
     m_maxTokens = m_qs.value(QStringLiteral("maxTokens"), 0).toInt();
     m_model = m_qs.value(QStringLiteral("model")).toString();
-    m_webSearchEnabled = m_qs.value(QStringLiteral("webSearchEnabled"), false).toBool();
     m_webSearchProvider = m_qs.value(QStringLiteral("webSearchProvider"), QStringLiteral("brave")).toString();
     if (m_webSearchProvider != QLatin1String("brave") && m_webSearchProvider != QLatin1String("tavily")
         && m_webSearchProvider != QLatin1String("exa"))
         m_webSearchProvider = QStringLiteral("brave");
     m_webSearchApiKey = m_qs.value(QStringLiteral("webSearchApiKey")).toString();
+    if (m_qs.contains(QStringLiteral("webSearchEnabled")))
+        m_webSearchEnabled = m_qs.value(QStringLiteral("webSearchEnabled")).toBool();
+    else
+        m_webSearchEnabled = !m_webSearchApiKey.trimmed().isEmpty();
 
     reloadBackends();
     m_backendId = m_store->setting(QStringLiteral("current_backend"));

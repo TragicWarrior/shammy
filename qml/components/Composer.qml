@@ -263,10 +263,15 @@ Rectangle {
                     }
                     ThemedMenuItem {
                         iconKind: "globe"
-                        text: "Web search"
-                        checkable: true
-                        checked: chat.webSearch
-                        onTriggered: chat.webSearch = !chat.webSearch
+                        text: chat.webSearchAvailable ? "Web search" : "Web search (set API key in Settings)"
+                        checkable: chat.webSearchAvailable
+                        checked: chat.webSearchAvailable && chat.webSearch
+                        onTriggered: {
+                            if (chat.webSearchAvailable)
+                                chat.webSearch = !chat.webSearch
+                            else
+                                root.settingsRequested()
+                        }
                     }
                 }
             }
