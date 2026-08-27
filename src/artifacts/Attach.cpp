@@ -1,4 +1,5 @@
 #include "artifacts/Attach.h"
+#include "artifacts/DocumentExtract.h"
 #include "artifacts/SpreadsheetExtract.h"
 
 #include <QFile>
@@ -31,11 +32,8 @@ bool isKnownBinaryMime(const QString &mime)
         QStringLiteral("application/x-elf"),
         QStringLiteral("application/x-msdownload"),
         QStringLiteral("application/vnd.microsoft.portable-executable"),
-        QStringLiteral("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
         QStringLiteral("application/vnd.openxmlformats-officedocument.presentationml.presentation"),
-        QStringLiteral("application/msword"),
         QStringLiteral("application/vnd.ms-powerpoint"),
-        QStringLiteral("application/vnd.oasis.opendocument.text"),
         QStringLiteral("application/vnd.oasis.opendocument.presentation"),
         QStringLiteral("application/epub+zip"),
         QStringLiteral("application/x-iso9660-image"),
@@ -69,7 +67,6 @@ bool isTextMime(const QString &mime)
         QStringLiteral("application/sql"),
         QStringLiteral("application/x-sql"),
         QStringLiteral("application/graphql"),
-        QStringLiteral("application/rtf"),
         QStringLiteral("application/x-ndjson"),
         QStringLiteral("inode/x-empty"),
         QStringLiteral("application/x-empty"),
@@ -100,14 +97,27 @@ bool looksLikeText(const QByteArray &head)
 
 Kind kindForMime(const QString &mime, const QString &suffix, const QByteArray &head)
 {
-    if (!suffix.isEmpty()
-        && SpreadsheetExtract::isSpreadsheetPath(QStringLiteral("x.") + suffix.toLower()))
+    const QString suf = suffix.toLower();
+    if (!suf.isEmpty() && SpreadsheetExtract::isSpreadsheetPath(QStringLiteral("x.") + suf))
     {
         return Kind::Spreadsheet;
+    }
+    if (!suf.isEmpty() && DocumentExtract::isDocumentPath(QStringLiteral("x.") + suf))
+    {
+        return Kind::Document;
     }
     if (mime.startsWith(QLatin1String("image/")))
     {
         return Kind::Image;
+    }
+    if (mime == QLatin1String("application/msword")
+        || mime
+            == QLatin1String(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        || mime == QLatin1String("application/vnd.oasis.opendocument.text")
+        || mime == QLatin1String("application/rtf") || mime == QLatin1String("text/rtf"))
+    {
+        return Kind::Document;
     }
     if (isTextMime(mime))
     {
@@ -129,6 +139,10 @@ Kind kindForPath(const QString &path)
     if (SpreadsheetExtract::isSpreadsheetPath(path))
     {
         return Kind::Spreadsheet;
+    }
+    if (DocumentExtract::isDocumentPath(path))
+    {
+        return Kind::Document;
     }
     const QFileInfo fi(path);
     const QString mime = QMimeDatabase().mimeTypeForFile(fi).name();

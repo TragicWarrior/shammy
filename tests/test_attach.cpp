@@ -29,6 +29,15 @@ private slots:
         QCOMPARE(Attach::kindForMime(QStringLiteral("application/zip")), Attach::Kind::Unsupported);
         QCOMPARE(Attach::kindForMime(
                      QStringLiteral(
+                         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+                     QStringLiteral("docx")),
+                 Attach::Kind::Document);
+        QCOMPARE(Attach::kindForMime(QStringLiteral("application/msword"), QStringLiteral("doc")),
+                 Attach::Kind::Document);
+        QCOMPARE(Attach::kindForMime(QStringLiteral("application/rtf"), QStringLiteral("rtf")),
+                 Attach::Kind::Document);
+        QCOMPARE(Attach::kindForMime(
+                     QStringLiteral(
                          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
                      QStringLiteral("xlsx")),
                  Attach::Kind::Spreadsheet);
@@ -68,6 +77,9 @@ private slots:
         QCOMPARE(Attach::kindForPath(write(QStringLiteral("doc.json"), QByteArray("{}"))), Attach::Kind::Text);
         QCOMPARE(Attach::kindForPath(write(QStringLiteral("sales.xlsx"), QByteArray("PK"))), Attach::Kind::Spreadsheet);
         QCOMPARE(Attach::kindForPath(write(QStringLiteral("book.ods"), QByteArray("PK"))), Attach::Kind::Spreadsheet);
+        QCOMPARE(Attach::kindForPath(write(QStringLiteral("memo.docx"), QByteArray("PK"))), Attach::Kind::Document);
+        QCOMPARE(Attach::kindForPath(write(QStringLiteral("notes.odt"), QByteArray("PK"))), Attach::Kind::Document);
+        QCOMPARE(Attach::kindForPath(write(QStringLiteral("letter.rtf"), QByteArray("{\\rtf"))), Attach::Kind::Document);
         QCOMPARE(Attach::kindForPath(write(QStringLiteral("file.pdf"), QByteArray("%PDF-1.4"))), Attach::Kind::Unsupported);
         QCOMPARE(Attach::kindForPath(write(QStringLiteral("pic.png"), QByteArray("\x89PNG"))), Attach::Kind::Image);
         QCOMPARE(Attach::kindForPath(write(QStringLiteral("noext"), QByteArray("just words"))), Attach::Kind::Text);

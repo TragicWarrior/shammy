@@ -9,6 +9,7 @@ enum class Kind
 {
     Image,
     Spreadsheet,
+    Document,
     Text,
     Unsupported
 };

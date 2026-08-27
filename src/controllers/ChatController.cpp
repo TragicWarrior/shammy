@@ -2,6 +2,7 @@
 #include "Util.h"
 #include "artifacts/ArtifactExtractor.h"
 #include "artifacts/Attach.h"
+#include "artifacts/DocumentExtract.h"
 #include "artifacts/DocxExport.h"
 #include "artifacts/HtmlDocument.h"
 #include "artifacts/SpreadsheetExtract.h"
@@ -611,6 +612,16 @@ bool ChatController::tryAttachPath(const QString &path, QString *error)
                     .arg(fi.fileName()));
         }
     }
+    else if (kind == Attach::Kind::Document)
+    {
+        if (!DocxExport::available(m_settings->officeBinaryPath()))
+        {
+            return fail(QStringLiteral(
+                            "Can't attach `%1`: LibreOffice/OpenOffice is needed to read Word "
+                            "and OpenDocument files.")
+                            .arg(fi.fileName()));
+        }
+    }
     else if (kind == Attach::Kind::Unsupported)
     {
         return fail(QStringLiteral("Can't attach `%1`: that file type isn't supported.")
@@ -1054,6 +1065,24 @@ void ChatController::send()
                 extra += QStringLiteral("\n\nAttached spreadsheet `%1` sheet `%2`:\n```csv\n%3\n```")
                              .arg(fi.fileName(), sh.name, csv);
             }
+            continue;
+        }
+        if (DocumentExtract::isDocumentPath(path))
+        {
+            QString err;
+            QString body = DocumentExtract::extract(path, m_settings->officeBinaryPath(), &err);
+            if (body.isEmpty())
+            {
+                extra += QStringLiteral("\n\nAttached document `%1` could not be read: %2")
+                             .arg(fi.fileName(), err.isEmpty() ? QStringLiteral("unknown error") : err);
+                continue;
+            }
+            if (body.size() > 256 * 1024)
+            {
+                body.truncate(256 * 1024);
+            }
+            extra += QStringLiteral("\n\nAttached document `%1`:\n```\n%2\n```")
+                         .arg(fi.fileName(), body);
             continue;
         }
         QFile f(path);
