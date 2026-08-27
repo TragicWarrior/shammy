@@ -296,7 +296,7 @@ Rectangle {
                         || (event.key === Qt.Key_V && (event.modifiers & Qt.ControlModifier)
                             && !(event.modifiers & Qt.ShiftModifier)
                             && !(event.modifiers & Qt.AltModifier))
-                    if (pasteKey && chat.pasteClipboardImage()) {
+                    if (pasteKey && chat.pasteClipboard()) {
                         event.accepted = true
                         return
                     }

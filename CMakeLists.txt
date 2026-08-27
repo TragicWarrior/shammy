@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(shammy VERSION 0.9.2 LANGUAGES CXX)
+project(shammy VERSION 0.9.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -45,6 +45,10 @@ set(CORE_SOURCES
     src/artifacts/DocxExport.h
     src/artifacts/SpreadsheetExtract.cpp
     src/artifacts/SpreadsheetExtract.h
+    src/artifacts/DocumentExtract.cpp
+    src/artifacts/DocumentExtract.h
+    src/artifacts/Attach.cpp
+    src/artifacts/Attach.h
     src/mcp/JsonRpc.cpp
     src/mcp/JsonRpc.h
     src/mcp/McpClient.cpp
@@ -62,7 +66,7 @@ set(CORE_SOURCES
 
 add_library(shammy_core STATIC ${CORE_SOURCES})
 target_include_directories(shammy_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(shammy_core PUBLIC Qt6::Core Qt6::Network Qt6::Sql)
+target_link_libraries(shammy_core PUBLIC Qt6::Core Qt6::Gui Qt6::Network Qt6::Sql)
 target_compile_definitions(shammy_core PUBLIC SHAMMY_VERSION="${PROJECT_VERSION}")
 set_target_properties(shammy_core PROPERTIES AUTOMOC ON)
 

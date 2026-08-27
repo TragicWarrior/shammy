@@ -6,6 +6,7 @@
 #include "models/ConversationListModel.h"
 #include "models/MessageListModel.h"
 #include "models/SimpleListModels.h"
+#include "openai/ChatTypes.h"
 #include "openai/OpenAiClient.h"
 #include "persist/Store.h"
 #include "compact/Compactor.h"
@@ -13,10 +14,15 @@
 
 #include <QHash>
 #include <QJsonArray>
+#include <QList>
 #include <QObject>
 #include <QSet>
 #include <QUrl>
 #include <QVariant>
+#include <QVector>
+
+class QEvent;
+class QMimeData;
 
 class ChatController : public QObject
 {
@@ -32,6 +38,7 @@ class ChatController : public QObject
     Q_PROPERTY(QString composerText READ composerText WRITE setComposerText NOTIFY composerTextChanged)
     Q_PROPERTY(QString replyQuote READ replyQuote NOTIFY replyQuoteChanged)
     Q_PROPERTY(QStringList pendingAttachments READ pendingAttachments NOTIFY pendingAttachmentsChanged)
+    Q_PROPERTY(bool fileDropHover READ fileDropHover NOTIFY fileDropHoverChanged)
     Q_PROPERTY(bool artifactPaneOpen READ artifactPaneOpen WRITE setArtifactPaneOpen NOTIFY artifactPaneOpenChanged)
     Q_PROPERTY(int currentArtifactIndex READ currentArtifactIndex WRITE setCurrentArtifactIndex NOTIFY currentArtifactIndexChanged)
     Q_PROPERTY(int currentArtifactVersion READ currentArtifactVersion WRITE setCurrentArtifactVersion NOTIFY currentArtifactVersionChanged)
@@ -79,7 +86,8 @@ public:
     QString composerText() const { return m_composer; }
     void setComposerText(const QString &t);
     QString replyQuote() const { return m_replyQuote; }
-    QStringList pendingAttachments() const { return m_pendingFiles; }
+    QStringList pendingAttachments() const;
+    bool fileDropHover() const { return m_fileDropHover; }
     bool artifactPaneOpen() const { return m_artifactPaneOpen; }
     void setArtifactPaneOpen(bool v);
     int currentArtifactIndex() const { return m_artIndex; }
@@ -127,6 +135,7 @@ public:
     Q_INVOKABLE void clearReplyQuote();
     Q_INVOKABLE void copyText(const QString &text);
     Q_INVOKABLE void attachFile(const QString &urlOrPath);
+    Q_INVOKABLE bool pasteClipboard();
     Q_INVOKABLE bool pasteClipboardImage();
     Q_INVOKABLE void removeAttachment(int index);
     Q_INVOKABLE void renameConversation(const QString &id, const QString &title);
@@ -151,6 +160,7 @@ signals:
     void composerTextChanged();
     void replyQuoteChanged();
     void pendingAttachmentsChanged();
+    void fileDropHoverChanged();
     void artifactPaneOpenChanged();
     void currentArtifactIndexChanged();
     void currentArtifactVersionChanged();
@@ -217,6 +227,27 @@ private:
     void onCompactFailed(const QString &err);
     void finishCompacting();
     void setCompactStatus(const QString &s);
+    bool eventFilter(QObject *watched, QEvent *event) override;
+    void setFileDropHover(bool v);
+    bool tryAttachPath(const QString &path, QString *error);
+    void enqueuePaste(const QString &text);
+    void clearPending();
+    QList<QUrl> clipboardLocalUrls(const QMimeData *md) const;
+
+    struct PendingAttach
+    {
+        enum Type
+        {
+            File,
+            Image,
+            Paste
+        } type = File;
+        QString label;
+        QString rest;
+        QString path;
+        ContentPart image;
+        QString paste;
+    };
 
     Store *m_store = nullptr;
     OpenAiClient *m_client = nullptr;
@@ -234,8 +265,8 @@ private:
     QString m_convId;
     QString m_composer;
     QString m_replyQuote;
-    QStringList m_pendingFiles;
-    QVector<ContentPart> m_pendingImages;
+    QVector<PendingAttach> m_pending;
+    bool m_fileDropHover = false;
     QString m_errorBanner;
     bool m_streaming = false;
     bool m_private = false;

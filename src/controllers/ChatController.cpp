@@ -1,6 +1,8 @@
 #include "controllers/ChatController.h"
 #include "Util.h"
 #include "artifacts/ArtifactExtractor.h"
+#include "artifacts/Attach.h"
+#include "artifacts/DocumentExtract.h"
 #include "artifacts/DocxExport.h"
 #include "artifacts/HtmlDocument.h"
 #include "artifacts/SpreadsheetExtract.h"
@@ -10,6 +12,9 @@
 #include <QClipboard>
 #include <QDesktopServices>
 #include <QDir>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QEvent>
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -31,6 +36,7 @@
 #include <QTimeZone>
 #include <QUrl>
 #include <QVariant>
+#include <QWindow>
 
 static const char *kSystem = R"(You are Shammy, a local desktop assistant talking to a model served over an OpenAI-compatible API (Ollama, llama.cpp, or similar).
 
@@ -143,6 +149,10 @@ ChatController::ChatController(Store *store, OpenAiClient *client, McpController
     applyDefaultThinking();
     reloadHistory();
     refreshContextUsage();
+    if (qApp)
+    {
+        qApp->installEventFilter(this);
+    }
 }
 
 void ChatController::setComposerText(const QString &t)
@@ -408,7 +418,7 @@ void ChatController::newPrivateChat()
 void ChatController::startProjectChat(const QString &text)
 {
     const QString t = text.trimmed();
-    if (t.isEmpty() && m_pendingFiles.isEmpty() && m_pendingImages.isEmpty())
+    if (t.isEmpty() && m_pending.isEmpty())
     {
         beginSession(false);
         m_projects->showChat();
@@ -493,38 +503,163 @@ void ChatController::openConversation(const QString &id)
     refreshContextUsage();
 }
 
+QStringList ChatController::pendingAttachments() const
+{
+    QStringList out;
+    out.reserve(m_pending.size());
+    for (const PendingAttach &a : m_pending)
+    {
+        out.append(a.label + QStringLiteral(" — ") + a.rest);
+    }
+    return out;
+}
+
+void ChatController::clearPending()
+{
+    if (m_pending.isEmpty())
+    {
+        return;
+    }
+    m_pending.clear();
+    emit pendingAttachmentsChanged();
+}
+
+void ChatController::setFileDropHover(bool v)
+{
+    if (m_fileDropHover == v)
+    {
+        return;
+    }
+    m_fileDropHover = v;
+    emit fileDropHoverChanged();
+}
+
+void ChatController::enqueuePaste(const QString &text)
+{
+    PendingAttach a;
+    a.type = PendingAttach::Paste;
+    a.label = Attach::pastedChipLabel(text.size());
+    a.rest = QStringLiteral("pasted-text");
+    a.paste = text;
+    m_pending.append(a);
+    emit pendingAttachmentsChanged();
+    setError({});
+}
+
+bool ChatController::tryAttachPath(const QString &path, QString *error)
+{
+    const QFileInfo fi(path);
+    const auto fail = [&](const QString &msg) -> bool
+    {
+        if (error)
+        {
+            *error = msg;
+        }
+        return false;
+    };
+    if (!fi.exists())
+    {
+        return fail(QStringLiteral("Can't attach `%1`: file not found.").arg(fi.fileName().isEmpty()
+                                                                                ? path
+                                                                                : fi.fileName()));
+    }
+    if (fi.isDir())
+    {
+        return fail(QStringLiteral("Can't attach `%1`: that's a folder.").arg(fi.fileName()));
+    }
+    if (!fi.isFile())
+    {
+        return fail(QStringLiteral("Can't attach `%1`: not a regular file.").arg(fi.fileName()));
+    }
+
+    const Attach::Kind kind = Attach::kindForPath(path);
+    if (kind == Attach::Kind::Image)
+    {
+        if (!m_settings->modelVision())
+        {
+            return fail(QStringLiteral(
+                            "Can't attach `%1`: this model is not configured for vision. "
+                            "Enable Vision in Settings → Models.")
+                            .arg(fi.fileName()));
+        }
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly))
+        {
+            return fail(QStringLiteral("Can't attach `%1`: could not read the file.")
+                            .arg(fi.fileName()));
+        }
+        const QString mime = QMimeDatabase().mimeTypeForFile(fi).name();
+        PendingAttach a;
+        a.type = PendingAttach::Image;
+        a.label = fi.fileName();
+        a.rest = path;
+        a.path = path;
+        a.image.type = QStringLiteral("image");
+        a.image.imageDataUrl = QStringLiteral("data:%1;base64,%2")
+                                   .arg(mime, QString::fromLatin1(f.readAll().toBase64()));
+        a.image.title = fi.fileName();
+        m_pending.append(a);
+        emit pendingAttachmentsChanged();
+        return true;
+    }
+    if (kind == Attach::Kind::Spreadsheet)
+    {
+        if (!DocxExport::available(m_settings->officeBinaryPath()))
+        {
+            return fail(
+                QStringLiteral(
+                    "Can't attach `%1`: LibreOffice/OpenOffice is needed to convert spreadsheets.")
+                    .arg(fi.fileName()));
+        }
+    }
+    else if (kind == Attach::Kind::Document)
+    {
+        if (!DocxExport::available(m_settings->officeBinaryPath()))
+        {
+            return fail(QStringLiteral(
+                            "Can't attach `%1`: LibreOffice/OpenOffice is needed to read Word "
+                            "and OpenDocument files.")
+                            .arg(fi.fileName()));
+        }
+    }
+    else if (kind == Attach::Kind::Unsupported)
+    {
+        return fail(QStringLiteral("Can't attach `%1`: that file type isn't supported.")
+                        .arg(fi.fileName()));
+    }
+
+    PendingAttach a;
+    a.type = PendingAttach::File;
+    a.label = fi.fileName();
+    a.rest = path;
+    a.path = path;
+    m_pending.append(a);
+    emit pendingAttachmentsChanged();
+    return true;
+}
+
 void ChatController::attachFile(const QString &urlOrPath)
 {
     QString path = urlOrPath;
     const QUrl u(urlOrPath);
     if (u.isLocalFile())
-        path = u.toLocalFile();
-    else if (urlOrPath.startsWith(QLatin1String("file:")))
-        path = QUrl(urlOrPath).toLocalFile();
-    QFileInfo fi(path);
-    if (!fi.exists())
-        return;
-    const QString mime = QMimeDatabase().mimeTypeForFile(fi).name();
-    if (mime.startsWith(QLatin1String("image/")))
     {
-        if (!m_settings->modelVision())
-        {
-            setError(QStringLiteral(
-                "This model is not configured for vision. Enable Vision in Settings → Models."));
-            return;
-        }
-        QFile f(path);
-        if (!f.open(QIODevice::ReadOnly))
-            return;
-        ContentPart p;
-        p.type = QStringLiteral("image");
-        p.imageDataUrl = QStringLiteral("data:%1;base64,%2")
-                             .arg(mime, QString::fromLatin1(f.readAll().toBase64()));
-        p.title = fi.fileName();
-        m_pendingImages.append(p);
+        path = u.toLocalFile();
     }
-    m_pendingFiles.append(fi.fileName() + QStringLiteral(" — ") + path);
-    emit pendingAttachmentsChanged();
+    else if (urlOrPath.startsWith(QLatin1String("file:")))
+    {
+        path = QUrl(urlOrPath).toLocalFile();
+    }
+    QString err;
+    if (tryAttachPath(path, &err))
+    {
+        setError({});
+        return;
+    }
+    if (!err.isEmpty())
+    {
+        setError(err);
+    }
 }
 
 bool ChatController::enqueueImageBytes(const QByteArray &bytes, const QString &mime, const QString &title)
@@ -539,13 +674,15 @@ bool ChatController::enqueueImageBytes(const QByteArray &bytes, const QString &m
             "This model is not configured for vision. Enable Vision in Settings → Models."));
         return false;
     }
-    ContentPart p;
-    p.type = QStringLiteral("image");
-    p.imageDataUrl = QStringLiteral("data:%1;base64,%2")
-                         .arg(mime, QString::fromLatin1(bytes.toBase64()));
-    p.title = title;
-    m_pendingImages.append(p);
-    m_pendingFiles.append(title + QStringLiteral(" — clipboard"));
+    PendingAttach a;
+    a.type = PendingAttach::Image;
+    a.label = title;
+    a.rest = QStringLiteral("clipboard");
+    a.image.type = QStringLiteral("image");
+    a.image.imageDataUrl = QStringLiteral("data:%1;base64,%2")
+                               .arg(mime, QString::fromLatin1(bytes.toBase64()));
+    a.image.title = title;
+    m_pending.append(a);
     emit pendingAttachmentsChanged();
     setError({});
     return true;
@@ -628,7 +765,36 @@ bool ChatController::pasteClipboardImage()
         return true;
     }
 
-    QList<QUrl> urls = md->urls();
+    const QList<QUrl> urls = clipboardLocalUrls(md);
+    if (!urls.isEmpty())
+    {
+        const int before = m_pending.size();
+        for (const QUrl &u : urls)
+        {
+            const QString path = u.toLocalFile();
+            const QString mime = QMimeDatabase().mimeTypeForFile(path).name();
+            if (!mime.startsWith(QLatin1String("image/")))
+            {
+                continue;
+            }
+            attachFile(path);
+        }
+        if (m_pending.size() > before)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+QList<QUrl> ChatController::clipboardLocalUrls(const QMimeData *md) const
+{
+    QList<QUrl> urls;
+    if (!md)
+    {
+        return urls;
+    }
+    urls = md->urls();
     if (urls.isEmpty() && md->hasFormat(QStringLiteral("text/uri-list")))
     {
         const QString list = QString::fromUtf8(md->data(QStringLiteral("text/uri-list")));
@@ -642,38 +808,180 @@ bool ChatController::pasteClipboardImage()
             urls.append(QUrl(trimmed));
         }
     }
-    if (!urls.isEmpty())
+    QList<QUrl> local;
+    for (const QUrl &u : urls)
     {
-        const int before = m_pendingFiles.size();
-        for (const QUrl &u : urls)
+        if (u.isLocalFile())
         {
-            if (!u.isLocalFile())
-            {
-                continue;
-            }
-            const QString path = u.toLocalFile();
-            const QString mime = QMimeDatabase().mimeTypeForFile(path).name();
-            if (!mime.startsWith(QLatin1String("image/")))
-            {
-                continue;
-            }
-            attachFile(path);
-        }
-        if (m_pendingFiles.size() > before)
-        {
-            return true;
+            local.append(u);
         }
     }
-    return false;
+    return local;
+}
+
+bool ChatController::pasteClipboard()
+{
+    const QClipboard *clip = QGuiApplication::clipboard();
+    if (!clip)
+    {
+        return false;
+    }
+    const QMimeData *md = clip->mimeData(QClipboard::Clipboard);
+    if (!md)
+    {
+        return false;
+    }
+
+    const QList<QUrl> urls = clipboardLocalUrls(md);
+    if (!urls.isEmpty())
+    {
+        QStringList errors;
+        for (const QUrl &u : urls)
+        {
+            QString err;
+            if (!tryAttachPath(u.toLocalFile(), &err) && !err.isEmpty())
+            {
+                errors.append(err);
+            }
+        }
+        if (!errors.isEmpty())
+        {
+            setError(errors.join(QLatin1Char('\n')));
+        }
+        else
+        {
+            setError({});
+        }
+        return true;
+    }
+
+    if (pasteClipboardImage())
+    {
+        return true;
+    }
+
+    if (!md->hasText())
+    {
+        return false;
+    }
+    const QString t = md->text();
+    if (t.size() < Attach::kPasteChipMin)
+    {
+        return false;
+    }
+    enqueuePaste(t);
+    return true;
+}
+
+static bool isQmlDropArea(QObject *watched)
+{
+    return QByteArray(watched->metaObject()->className()).contains("DropArea");
+}
+
+static bool isTextInputItem(QObject *watched)
+{
+    const QByteArray cn = watched->metaObject()->className();
+    return cn.contains("TextEdit") || cn.contains("TextInput") || cn.contains("TextArea");
+}
+
+bool ChatController::eventFilter(QObject *watched, QEvent *event)
+{
+    if (!m_projects || m_projects->pane() != QLatin1String("chat"))
+    {
+        return QObject::eventFilter(watched, event);
+    }
+    const QEvent::Type type = event->type();
+    if (type == QEvent::DragLeave)
+    {
+        if (qobject_cast<QWindow *>(watched) || isTextInputItem(watched))
+        {
+            setFileDropHover(false);
+        }
+        return false;
+    }
+    if (type != QEvent::DragEnter && type != QEvent::DragMove && type != QEvent::Drop)
+    {
+        return false;
+    }
+    auto *de = static_cast<QDropEvent *>(event);
+    if (!de->mimeData() || !de->mimeData()->hasUrls())
+    {
+        return false;
+    }
+    bool anyLocal = false;
+    for (const QUrl &u : de->mimeData()->urls())
+    {
+        if (u.isLocalFile())
+        {
+            anyLocal = true;
+            break;
+        }
+    }
+    if (!anyLocal)
+    {
+        return false;
+    }
+    // Let QML DropArea own drops on the chat pane; only intercept the composer
+    // so TextArea does not insert file:// paths.
+    if (isQmlDropArea(watched))
+    {
+        if (type == QEvent::DragEnter || type == QEvent::DragMove)
+        {
+            setFileDropHover(true);
+        }
+        else if (type == QEvent::Drop)
+        {
+            setFileDropHover(false);
+        }
+        return false;
+    }
+    if (type == QEvent::DragEnter || type == QEvent::DragMove)
+    {
+        setFileDropHover(true);
+        if (isTextInputItem(watched))
+        {
+            de->acceptProposedAction();
+            return true;
+        }
+        return false;
+    }
+    setFileDropHover(false);
+    if (!isTextInputItem(watched))
+    {
+        return false;
+    }
+    QStringList errors;
+    for (const QUrl &u : de->mimeData()->urls())
+    {
+        if (!u.isLocalFile())
+        {
+            continue;
+        }
+        QString err;
+        if (!tryAttachPath(u.toLocalFile(), &err) && !err.isEmpty())
+        {
+            errors.append(err);
+        }
+    }
+    if (!errors.isEmpty())
+    {
+        setError(errors.join(QLatin1Char('\n')));
+    }
+    else
+    {
+        setError({});
+    }
+    de->acceptProposedAction();
+    return true;
 }
 
 void ChatController::removeAttachment(int index)
 {
-    if (index < 0 || index >= m_pendingFiles.size())
+    if (index < 0 || index >= m_pending.size())
+    {
         return;
-    m_pendingFiles.removeAt(index);
-    if (index < m_pendingImages.size())
-        m_pendingImages.removeAt(index);
+    }
+    m_pending.removeAt(index);
     emit pendingAttachmentsChanged();
 }
 
@@ -690,10 +998,8 @@ void ChatController::send()
     else if (!cmd.name.isEmpty())
     {
         m_composer.clear();
-        m_pendingFiles.clear();
-        m_pendingImages.clear();
+        clearPending();
         emit composerTextChanged();
-        emit pendingAttachmentsChanged();
         if (cmd.name == QLatin1String("compact"))
         {
             startCompact(cmd.args, false);
@@ -719,16 +1025,26 @@ void ChatController::send()
     }
     m_suppressAutoCompact = false;
     QString extra;
-    for (const QString &entry : m_pendingFiles)
+    QVector<ContentPart> images;
+    for (const PendingAttach &a : m_pending)
     {
-        const int dash = entry.indexOf(QStringLiteral(" — "));
-        if (dash < 0)
+        if (a.type == PendingAttach::Image)
+        {
+            images.append(a.image);
             continue;
-        const QString path = entry.mid(dash + 3);
+        }
+        if (a.type == PendingAttach::Paste)
+        {
+            QString body = a.paste;
+            if (body.size() > 256 * 1024)
+            {
+                body.truncate(256 * 1024);
+            }
+            extra += QStringLiteral("\n\n%1:\n```\n%2\n```").arg(a.label, body);
+            continue;
+        }
+        const QString path = a.path;
         QFileInfo fi(path);
-        const QString mime = QMimeDatabase().mimeTypeForFile(fi).name();
-        if (mime.startsWith(QLatin1String("image/")))
-            continue;
         if (SpreadsheetExtract::isSpreadsheetPath(path))
         {
             QString err;
@@ -743,20 +1059,44 @@ void ChatController::send()
             {
                 QString csv = sh.csv;
                 if (csv.size() > 32 * 1024)
+                {
                     csv.truncate(32 * 1024);
+                }
                 extra += QStringLiteral("\n\nAttached spreadsheet `%1` sheet `%2`:\n```csv\n%3\n```")
                              .arg(fi.fileName(), sh.name, csv);
             }
             continue;
         }
+        if (DocumentExtract::isDocumentPath(path))
+        {
+            QString err;
+            QString body = DocumentExtract::extract(path, m_settings->officeBinaryPath(), &err);
+            if (body.isEmpty())
+            {
+                extra += QStringLiteral("\n\nAttached document `%1` could not be read: %2")
+                             .arg(fi.fileName(), err.isEmpty() ? QStringLiteral("unknown error") : err);
+                continue;
+            }
+            if (body.size() > 256 * 1024)
+            {
+                body.truncate(256 * 1024);
+            }
+            extra += QStringLiteral("\n\nAttached document `%1`:\n```\n%2\n```")
+                         .arg(fi.fileName(), body);
+            continue;
+        }
         QFile f(path);
         if (!f.open(QIODevice::ReadOnly))
+        {
             continue;
+        }
         extra += QStringLiteral("\n\nAttached file `%1`:\n```\n%2\n```")
                      .arg(fi.fileName(), QString::fromUtf8(f.read(32 * 1024)));
     }
-    if (text.isEmpty() && extra.isEmpty() && m_pendingImages.isEmpty())
+    if (text.isEmpty() && extra.isEmpty() && images.isEmpty())
+    {
         return;
+    }
 
     ensureConversation();
     if (!m_private)
@@ -775,7 +1115,7 @@ void ChatController::send()
     user.conversationId = m_convId;
     user.role = QStringLiteral("user");
     user.content = formatReplyPrompt(m_replyQuote, text) + extra;
-    user.attachments = m_pendingImages;
+    user.attachments = images;
     user.createdAt = nowMs();
     m_messages.append(user);
 
@@ -788,10 +1128,8 @@ void ChatController::send()
     persistMessage(stored);
 
     m_composer.clear();
-    m_pendingFiles.clear();
-    m_pendingImages.clear();
+    clearPending();
     emit composerTextChanged();
-    emit pendingAttachmentsChanged();
     clearReplyQuote();
     setError({});
     m_toolRounds = 0;
