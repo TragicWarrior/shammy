@@ -455,6 +455,7 @@ void ChatController::beginSession(bool priv)
     m_convId.clear();
     m_messages.clear();
     m_artifacts.setItems({});
+    setArtifactPaneOpen(false);
     m_accTools.clear();
     m_pendingToolQueue = {};
     m_toolRounds = 0;
@@ -548,6 +549,9 @@ void ChatController::openConversation(const QString &id)
     m_suppressAutoCompact = false;
     setCompactStatus({});
     clearReplyQuote();
+    // Switching into a chat starts with the preview pane closed rather than
+    // carrying the previous chat's open pane over.
+    setArtifactPaneOpen(false);
     refreshContextUsage();
     if (reattach && !m_streaming)
     {

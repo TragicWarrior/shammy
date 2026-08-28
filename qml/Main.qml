@@ -311,7 +311,10 @@ ApplicationWindow {
         }
 
         ArtifactPane {
-            visible: settings.enableArtifacts && chat.artifactPaneOpen && chat.artifacts.rowCount() > 0
+            // Only alongside the chat view — navigating to projects/overview
+            // should not leave the preview pane hanging on the right.
+            visible: projects.pane === "chat" && settings.enableArtifacts
+                && chat.artifactPaneOpen && chat.artifacts.rowCount() > 0
             SplitView.preferredWidth: Theme.artifactWidth
             SplitView.minimumWidth: 280
             SplitView.fillWidth: false
