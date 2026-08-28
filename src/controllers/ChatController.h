@@ -306,8 +306,9 @@ private:
     bool m_wordExportBusy = false;
     int m_artIndex = 0;
     int m_artVersion = 1;
-    QString m_previewPath;
     QUrl m_previewUrl;
+    QString m_previewHtml;
+    int m_previewSeq = 0;
     QString m_search;
     int m_toolRounds = 0;
     bool m_forceFinalWrite = false;

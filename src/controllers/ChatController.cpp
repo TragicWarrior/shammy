@@ -1777,19 +1777,30 @@ void ChatController::onWordExportDone(const QString &err)
 void ChatController::writePreviewFile()
 {
     const QString html = currentArtifactPreviewHtml();
+    // Same content already previewed: keep the current file and URL so the view
+    // doesn't needlessly reload (e.g. when the pane is reopened on the same
+    // artifact). m_previewUrl already reflects this html.
+    if (html == m_previewHtml)
+        return;
+    m_previewHtml = html;
     QUrl next;
     if (!html.isEmpty())
     {
         const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
             + QStringLiteral("/preview");
         QDir().mkpath(dir);
-        m_previewPath = dir + QStringLiteral("/artifact.html");
-        QFile f(m_previewPath);
+        const QString path = dir + QStringLiteral("/artifact.html");
+        QFile f(path);
         if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
         {
             f.write(html.toUtf8());
             f.close();
-            next = QUrl::fromLocalFile(m_previewPath);
+            next = QUrl::fromLocalFile(path);
+            // A stable file URL reads as already-loaded, so the WebEngine view
+            // would never refresh when the selection changes. Bump a cache-
+            // busting query each time the content changes to force a reload.
+            // The file is reused and overwritten — nothing is deleted.
+            next.setQuery(QStringLiteral("v=%1").arg(++m_previewSeq));
         }
     }
     if (m_previewUrl == next)
