@@ -282,7 +282,6 @@ Rectangle {
                         }
                         ThemedMenu {
                             id: projMenu
-                            ThemedMenuItem { text: "Clear filter"; onTriggered: projects.clearCurrent() }
                             ThemedMenuItem { text: "Rename"; onTriggered: projects.renameProject(projectId, name) }
                             ThemedMenuItem {
                                 iconKind: "trash"
