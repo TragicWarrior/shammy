@@ -234,6 +234,7 @@ QString ChatController::conversationProjectName() const
 
 void ChatController::reloadHistory()
 {
+    // Sidebar history is always global — it is not scoped to the open project.
     QList<Conversation> all;
     if (!m_search.trimmed().isEmpty())
     {
@@ -241,7 +242,7 @@ void ChatController::reloadHistory()
     }
     else
     {
-        all = m_store->conversations(m_projects->currentProjectId());
+        all = m_store->conversations({});
     }
     QList<Conversation> fav;
     QList<Conversation> rest;
@@ -258,6 +259,23 @@ void ChatController::reloadHistory()
     }
     m_favorites.setItems(fav);
     m_conversations.setItems(rest);
+
+    // The project workspace shows only the current project's chats.
+    QList<Conversation> pfav;
+    QList<Conversation> prest;
+    const QString projectId = m_projects->currentProjectId();
+    if (!projectId.isEmpty())
+    {
+        for (const Conversation &c : m_store->conversations(projectId))
+        {
+            if (c.pinned)
+                pfav.append(c);
+            else
+                prest.append(c);
+        }
+    }
+    m_projectFavorites.setItems(pfav);
+    m_projectConversations.setItems(prest);
 }
 
 void ChatController::setError(const QString &s)

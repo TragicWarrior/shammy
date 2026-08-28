@@ -364,7 +364,7 @@ Rectangle {
                         }
                         Text {
                             width: parent.width - 24
-                            text: projects.currentProjectId.length ? projects.currentProjectName : "Chats"
+                            text: "Chats"
                             color: Theme.muted
                             font.pixelSize: 12
                             font.weight: Font.DemiBold

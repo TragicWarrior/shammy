@@ -192,13 +192,13 @@ Item {
                         Column {
                             id: recentsCol
                             width: parent.width
-                            Repeater { model: chat.favorites; delegate: recentsDelegate }
-                            Repeater { model: chat.conversations; delegate: recentsDelegate }
+                            Repeater { model: chat.projectFavorites; delegate: recentsDelegate }
+                            Repeater { model: chat.projectConversations; delegate: recentsDelegate }
                         }
                     }
 
                     Text {
-                        visible: chat.conversations.rowCount() === 0 && chat.favorites.rowCount() === 0
+                        visible: chat.projectConversations.rowCount() === 0 && chat.projectFavorites.rowCount() === 0
                         text: "No chats in this project yet. Send a message above to start one."
                         color: Theme.muted
                         font.pixelSize: 13

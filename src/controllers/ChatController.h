@@ -30,6 +30,8 @@ class ChatController : public QObject
     Q_PROPERTY(MessageListModel *messages READ messages CONSTANT)
     Q_PROPERTY(ConversationListModel *conversations READ conversations CONSTANT)
     Q_PROPERTY(ConversationListModel *favorites READ favorites CONSTANT)
+    Q_PROPERTY(ConversationListModel *projectConversations READ projectConversations CONSTANT)
+    Q_PROPERTY(ConversationListModel *projectFavorites READ projectFavorites CONSTANT)
     Q_PROPERTY(bool privateSession READ privateSession NOTIFY conversationChanged)
     Q_PROPERTY(ArtifactListModel *artifacts READ artifacts CONSTANT)
     Q_PROPERTY(bool streaming READ streaming NOTIFY streamingChanged)
@@ -78,6 +80,8 @@ public:
     MessageListModel *messages() { return &m_messages; }
     ConversationListModel *conversations() { return &m_conversations; }
     ConversationListModel *favorites() { return &m_favorites; }
+    ConversationListModel *projectConversations() { return &m_projectConversations; }
+    ConversationListModel *projectFavorites() { return &m_projectFavorites; }
     bool privateSession() const { return m_private; }
     ArtifactListModel *artifacts() { return &m_artifacts; }
     int artifactsRevision() const { return m_artifactsRevision; }
@@ -276,6 +280,8 @@ private:
     MessageListModel m_messages;
     ConversationListModel m_conversations;
     ConversationListModel m_favorites;
+    ConversationListModel m_projectConversations;
+    ConversationListModel m_projectFavorites;
     ArtifactListModel m_artifacts;
     QHash<QString, QVariantList> m_artifactsByMessage;
     Artifact m_currentArtifact;
