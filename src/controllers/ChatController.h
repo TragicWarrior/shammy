@@ -34,6 +34,7 @@ class ChatController : public QObject
     Q_PROPERTY(ArtifactListModel *artifacts READ artifacts CONSTANT)
     Q_PROPERTY(bool streaming READ streaming NOTIFY streamingChanged)
     Q_PROPERTY(QString conversationId READ conversationId NOTIFY conversationChanged)
+    Q_PROPERTY(QString generatingConversationId READ generatingConversationId NOTIFY generatingConversationChanged)
     Q_PROPERTY(QString errorBanner READ errorBanner NOTIFY errorBannerChanged)
     Q_PROPERTY(QString composerText READ composerText WRITE setComposerText NOTIFY composerTextChanged)
     Q_PROPERTY(QString replyQuote READ replyQuote NOTIFY replyQuoteChanged)
@@ -82,6 +83,7 @@ public:
 
     bool streaming() const { return m_streaming; }
     QString conversationId() const { return m_convId; }
+    QString generatingConversationId() const { return m_genConvId; }
     QString errorBanner() const { return m_errorBanner; }
     QString composerText() const { return m_composer; }
     void setComposerText(const QString &t);
@@ -156,6 +158,7 @@ public:
 signals:
     void streamingChanged();
     void conversationChanged();
+    void generatingConversationChanged();
     void errorBannerChanged();
     void composerTextChanged();
     void replyQuoteChanged();
@@ -202,6 +205,19 @@ private:
     QVector<ChatMessage> apiHistory() const;
     QString systemPrompt() const;
     void beginAssistant();
+    // Generation runs against a single "generating conversation" that may differ
+    // from the visible one. While attached (generating == visible) these helpers
+    // drive the live model; while detached they drive m_genMessages so the stream
+    // keeps running in the background without touching what the user is viewing.
+    void detachGeneration();
+    void endGeneration();
+    void genAppend(const ChatMessage &m);
+    void genAppendAssistantDelta(const QString &text);
+    void genAppendReasoningDelta(const QString &text);
+    void genFinishLast();
+    void genSetLastToolCalls(const QString &json);
+    ChatMessage genLast() const;
+    QVector<ChatMessage> genAllMessages() const;
     void runPendingTools();
     void executeOneTool();
     void finishToolMessage(const QString &toolCallId, const QString &name, const QString &content);
@@ -270,6 +286,18 @@ private:
     QString m_errorBanner;
     bool m_streaming = false;
     bool m_private = false;
+    // Background generation context. m_genConvId is non-empty whenever a
+    // generation is in flight (attached or not); m_genAttached is true when the
+    // live model currently reflects it. m_genMessages holds the working message
+    // list while detached; the model/backend/thinking are captured at start so a
+    // detached tool loop keeps using the generating chat's settings.
+    QString m_genConvId;
+    bool m_genAttached = false;
+    bool m_genPrivate = false;
+    QString m_genModel;
+    QString m_genBackendId;
+    QString m_genThinking;
+    QVector<ChatMessage> m_genMessages;
     bool m_webSearch = true;
     QString m_toolActivity;
     bool m_artifactPaneOpen = false;

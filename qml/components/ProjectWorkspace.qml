@@ -440,6 +440,22 @@ Item {
                 anchors.leftMargin: 8
                 anchors.rightMargin: 8
                 Text {
+                    id: recSpinner
+                    visible: chat.generatingConversationId === conversationId
+                    Layout.preferredWidth: visible ? 14 : 0
+                    text: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][spin]
+                    color: Theme.text
+                    font.pixelSize: 12
+                    font.family: "monospace"
+                    property int spin: 0
+                    Timer {
+                        interval: 80
+                        running: recSpinner.visible
+                        repeat: true
+                        onTriggered: recSpinner.spin = (recSpinner.spin + 1) % 10
+                    }
+                }
+                Text {
                     Layout.fillWidth: true
                     text: title.length ? title : "New chat"
                     color: Theme.text

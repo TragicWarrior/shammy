@@ -642,9 +642,28 @@ Rectangle {
                 return convHover.containsMouse ? Theme.hover : "transparent"
             }
             Text {
+                id: genSpinner
+                visible: chat.generatingConversationId === conversationId
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: parent.left
                 anchors.leftMargin: 10
+                width: visible ? 14 : 0
+                text: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][spin]
+                color: Theme.text
+                font.pixelSize: 12
+                font.family: "monospace"
+                property int spin: 0
+                Timer {
+                    interval: 80
+                    running: genSpinner.visible
+                    repeat: true
+                    onTriggered: genSpinner.spin = (genSpinner.spin + 1) % 10
+                }
+            }
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: genSpinner.visible ? 28 : 10
                 anchors.right: favBtn.left
                 anchors.rightMargin: 8
                 text: title.length ? title : "New chat"
