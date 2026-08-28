@@ -143,12 +143,16 @@ ApplicationWindow {
                             }
                         }
                     }
-                    // Project a chat belongs to. Mutually exclusive with the
+                    // Current project context. Mutually exclusive with the
                     // Private pill (private chats are never in a project), so it
-                    // shares the same slot beside the model picker.
+                    // shares the same slot beside the model picker. On the chat
+                    // pane it reflects the open chat's project; on the project
+                    // workspace it reflects the project being viewed.
                     Item {
                         id: projectTag
-                        visible: chat.conversationProjectName.length > 0
+                        readonly property string ctxProject: projects.pane === "chat"
+                            ? chat.conversationProjectName : projects.currentProjectName
+                        visible: ctxProject.length > 0
                         width: visible ? projPill.width : 0
                         height: 22
                         anchors.verticalCenter: parent.verticalCenter
@@ -165,7 +169,7 @@ ApplicationWindow {
                             Text {
                                 id: projLab
                                 anchors.centerIn: parent
-                                text: chat.conversationProjectName
+                                text: projectTag.ctxProject
                                 color: Theme.text
                                 font.pixelSize: 12
                                 elide: Text.ElideRight
