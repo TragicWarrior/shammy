@@ -140,9 +140,39 @@ ApplicationWindow {
                             }
                         }
                     }
-                    Text {
+                    // Project a chat belongs to. Mutually exclusive with the
+                    // Private pill (private chats are never in a project), so it
+                    // shares the same slot beside the model picker.
+                    Item {
+                        id: projectTag
+                        visible: chat.conversationProjectName.length > 0
+                        width: visible ? projPill.width : 0
+                        height: 22
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.left: privateTag.right
+                        anchors.leftMargin: visible ? 12 : 0
+                        Rectangle {
+                            id: projPill
+                            width: projLab.width + 20
+                            height: 22
+                            radius: 11
+                            color: Theme.selected
+                            border.color: Theme.border
+                            border.width: 1
+                            Text {
+                                id: projLab
+                                anchors.centerIn: parent
+                                text: chat.conversationProjectName
+                                color: Theme.text
+                                font.pixelSize: 12
+                                elide: Text.ElideRight
+                                width: Math.min(implicitWidth, 200)
+                            }
+                        }
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: projectTag.right
                         anchors.leftMargin: 12
                         visible: settings.loadingModels
                         text: "loading models…"

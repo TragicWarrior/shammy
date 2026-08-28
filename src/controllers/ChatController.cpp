@@ -222,6 +222,16 @@ QString ChatController::emptyHint() const
     return QStringLiteral("Send a message to start chatting.");
 }
 
+QString ChatController::conversationProjectName() const
+{
+    if (m_private || m_convId.isEmpty())
+        return {};
+    const Conversation c = m_store->conversation(m_convId);
+    if (c.projectId.isEmpty())
+        return {};
+    return m_store->project(c.projectId).name;
+}
+
 void ChatController::reloadHistory()
 {
     QList<Conversation> all;
@@ -2243,6 +2253,8 @@ void ChatController::moveToProject(const QString &id, const QString &projectId)
     c.projectId = projectId;
     c.updatedAt = nowMs();
     m_store->upsertConversation(c);
+    if (id == m_convId)
+        emit conversationChanged();
 }
 
 void ChatController::setCompactStatus(const QString &s)

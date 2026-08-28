@@ -34,6 +34,7 @@ class ChatController : public QObject
     Q_PROPERTY(ArtifactListModel *artifacts READ artifacts CONSTANT)
     Q_PROPERTY(bool streaming READ streaming NOTIFY streamingChanged)
     Q_PROPERTY(QString conversationId READ conversationId NOTIFY conversationChanged)
+    Q_PROPERTY(QString conversationProjectName READ conversationProjectName NOTIFY conversationChanged)
     Q_PROPERTY(QString generatingConversationId READ generatingConversationId NOTIFY generatingConversationChanged)
     Q_PROPERTY(QString errorBanner READ errorBanner NOTIFY errorBannerChanged)
     Q_PROPERTY(QString composerText READ composerText WRITE setComposerText NOTIFY composerTextChanged)
@@ -83,6 +84,7 @@ public:
 
     bool streaming() const { return m_streaming; }
     QString conversationId() const { return m_convId; }
+    QString conversationProjectName() const;
     QString generatingConversationId() const { return m_genConvId; }
     QString errorBanner() const { return m_errorBanner; }
     QString composerText() const { return m_composer; }
