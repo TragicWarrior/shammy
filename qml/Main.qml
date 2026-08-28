@@ -65,10 +65,13 @@ ApplicationWindow {
             DropArea {
                 id: chatDrop
                 anchors.fill: parent
-                enabled: projects.pane === "chat"
+                // NB: don't gate this with `enabled` — DropArea is an Item, and
+                // enabled:false disables mouse input for the whole subtree (the
+                // StackLayout), making the projects/overview panes unclickable.
+                // Gate the drop handling by pane instead.
                 keys: ["text/uri-list"]
                 onDropped: function(drop) {
-                    if (!drop.hasUrls)
+                    if (projects.pane !== "chat" || !drop.hasUrls)
                         return
                     for (let i = 0; i < drop.urls.length; ++i)
                         chat.attachFile(drop.urls[i])
@@ -140,9 +143,43 @@ ApplicationWindow {
                             }
                         }
                     }
-                    Text {
+                    // Current project context. Mutually exclusive with the
+                    // Private pill (private chats are never in a project), so it
+                    // shares the same slot beside the model picker. On the chat
+                    // pane it reflects the open chat's project; on the project
+                    // workspace it reflects the project being viewed.
+                    Item {
+                        id: projectTag
+                        readonly property string ctxProject: projects.pane === "chat"
+                            ? chat.conversationProjectName : projects.currentProjectName
+                        visible: ctxProject.length > 0
+                        width: visible ? projPill.width : 0
+                        height: 22
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.left: privateTag.right
+                        anchors.leftMargin: visible ? 12 : 0
+                        Rectangle {
+                            id: projPill
+                            width: projLab.width + 20
+                            height: 22
+                            radius: 11
+                            color: Theme.selected
+                            border.color: Theme.border
+                            border.width: 1
+                            Text {
+                                id: projLab
+                                anchors.centerIn: parent
+                                text: projectTag.ctxProject
+                                color: Theme.text
+                                font.pixelSize: 12
+                                elide: Text.ElideRight
+                                width: Math.min(implicitWidth, 200)
+                            }
+                        }
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: projectTag.right
                         anchors.leftMargin: 12
                         visible: settings.loadingModels
                         text: "loading models…"
@@ -281,7 +318,10 @@ ApplicationWindow {
         }
 
         ArtifactPane {
-            visible: settings.enableArtifacts && chat.artifactPaneOpen && chat.artifacts.rowCount() > 0
+            // Only alongside the chat view — navigating to projects/overview
+            // should not leave the preview pane hanging on the right.
+            visible: projects.pane === "chat" && settings.enableArtifacts
+                && chat.artifactPaneOpen && chat.artifacts.rowCount() > 0
             SplitView.preferredWidth: Theme.artifactWidth
             SplitView.minimumWidth: 280
             SplitView.fillWidth: false

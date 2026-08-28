@@ -192,13 +192,13 @@ Item {
                         Column {
                             id: recentsCol
                             width: parent.width
-                            Repeater { model: chat.favorites; delegate: recentsDelegate }
-                            Repeater { model: chat.conversations; delegate: recentsDelegate }
+                            Repeater { model: chat.projectFavorites; delegate: recentsDelegate }
+                            Repeater { model: chat.projectConversations; delegate: recentsDelegate }
                         }
                     }
 
                     Text {
-                        visible: chat.conversations.rowCount() === 0 && chat.favorites.rowCount() === 0
+                        visible: chat.projectConversations.rowCount() === 0 && chat.projectFavorites.rowCount() === 0
                         text: "No chats in this project yet. Send a message above to start one."
                         color: Theme.muted
                         font.pixelSize: 13
@@ -450,6 +450,24 @@ Item {
                     text: projects.formatUpdated(updatedAt)
                     color: Theme.muted
                     font.pixelSize: 12
+                }
+                // Trailing spinner keeps the title's left edge flush.
+                Text {
+                    id: recSpinner
+                    visible: chat.generatingConversationId === conversationId
+                    Layout.preferredWidth: visible ? 14 : 0
+                    horizontalAlignment: Text.AlignHCenter
+                    text: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][spin]
+                    color: Theme.text
+                    font.pixelSize: 12
+                    font.family: "monospace"
+                    property int spin: 0
+                    Timer {
+                        interval: 80
+                        running: recSpinner.visible
+                        repeat: true
+                        onTriggered: recSpinner.spin = (recSpinner.spin + 1) % 10
+                    }
                 }
             }
             MouseArea {
