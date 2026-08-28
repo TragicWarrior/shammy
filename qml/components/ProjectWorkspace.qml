@@ -440,9 +440,23 @@ Item {
                 anchors.leftMargin: 8
                 anchors.rightMargin: 8
                 Text {
+                    Layout.fillWidth: true
+                    text: title.length ? title : "New chat"
+                    color: Theme.text
+                    elide: Text.ElideRight
+                    font.pixelSize: 14
+                }
+                Text {
+                    text: projects.formatUpdated(updatedAt)
+                    color: Theme.muted
+                    font.pixelSize: 12
+                }
+                // Trailing spinner keeps the title's left edge flush.
+                Text {
                     id: recSpinner
                     visible: chat.generatingConversationId === conversationId
                     Layout.preferredWidth: visible ? 14 : 0
+                    horizontalAlignment: Text.AlignHCenter
                     text: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][spin]
                     color: Theme.text
                     font.pixelSize: 12
@@ -454,18 +468,6 @@ Item {
                         repeat: true
                         onTriggered: recSpinner.spin = (recSpinner.spin + 1) % 10
                     }
-                }
-                Text {
-                    Layout.fillWidth: true
-                    text: title.length ? title : "New chat"
-                    color: Theme.text
-                    elide: Text.ElideRight
-                    font.pixelSize: 14
-                }
-                Text {
-                    text: projects.formatUpdated(updatedAt)
-                    color: Theme.muted
-                    font.pixelSize: 12
                 }
             }
             MouseArea {

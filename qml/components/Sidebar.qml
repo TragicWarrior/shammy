@@ -642,28 +642,9 @@ Rectangle {
                 return convHover.containsMouse ? Theme.hover : "transparent"
             }
             Text {
-                id: genSpinner
-                visible: chat.generatingConversationId === conversationId
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: parent.left
                 anchors.leftMargin: 10
-                width: visible ? 14 : 0
-                text: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][spin]
-                color: Theme.text
-                font.pixelSize: 12
-                font.family: "monospace"
-                property int spin: 0
-                Timer {
-                    interval: 80
-                    running: genSpinner.visible
-                    repeat: true
-                    onTriggered: genSpinner.spin = (genSpinner.spin + 1) % 10
-                }
-            }
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.left: parent.left
-                anchors.leftMargin: genSpinner.visible ? 28 : 10
                 anchors.right: favBtn.left
                 anchors.rightMargin: 8
                 text: title.length ? title : "New chat"
@@ -675,7 +656,7 @@ Rectangle {
                 id: favBtn
                 z: 1
                 anchors.verticalCenter: parent.verticalCenter
-                anchors.right: delBtn.left
+                anchors.right: genSpinner.visible ? genSpinner.left : delBtn.left
                 anchors.rightMargin: 6
                 visible: convHover.containsMouse || pinned
                 width: visible ? 16 : 0
@@ -688,6 +669,28 @@ Rectangle {
                     anchors.margins: -6
                     cursorShape: Qt.PointingHandCursor
                     onClicked: chat.togglePin(conversationId)
+                }
+            }
+            // Background-generation spinner sits in the trailing controls slot so
+            // the title's left edge stays flush; hovering reveals the × instead.
+            Text {
+                id: genSpinner
+                visible: chat.generatingConversationId === conversationId && !convHover.containsMouse
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.right: parent.right
+                anchors.rightMargin: 8
+                width: visible ? 14 : 0
+                horizontalAlignment: Text.AlignHCenter
+                text: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][spin]
+                color: Theme.text
+                font.pixelSize: 12
+                font.family: "monospace"
+                property int spin: 0
+                Timer {
+                    interval: 80
+                    running: genSpinner.visible
+                    repeat: true
+                    onTriggered: genSpinner.spin = (genSpinner.spin + 1) % 10
                 }
             }
             Text {
