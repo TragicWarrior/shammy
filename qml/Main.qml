@@ -65,10 +65,13 @@ ApplicationWindow {
             DropArea {
                 id: chatDrop
                 anchors.fill: parent
-                enabled: projects.pane === "chat"
+                // NB: don't gate this with `enabled` — DropArea is an Item, and
+                // enabled:false disables mouse input for the whole subtree (the
+                // StackLayout), making the projects/overview panes unclickable.
+                // Gate the drop handling by pane instead.
                 keys: ["text/uri-list"]
                 onDropped: function(drop) {
-                    if (!drop.hasUrls)
+                    if (projects.pane !== "chat" || !drop.hasUrls)
                         return
                     for (let i = 0; i < drop.urls.length; ++i)
                         chat.attachFile(drop.urls[i])
