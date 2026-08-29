@@ -22,7 +22,7 @@ public:
     static QByteArray buildChatBody(const ChatRequest &req);
     static QString defaultApiKey(const QString &key);
 
-    void listModels(const QString &baseUrl, const QString &apiKey);
+    void listModels(const QString &baseUrl, const QString &apiKey, const QString &backendId = {});
     void probeModel(const QString &baseUrl, const QString &apiKey, const QString &model);
     void streamChat(const ChatRequest &req);
     void completeChat(const ChatRequest &req);
@@ -31,7 +31,7 @@ public:
     bool busy() const { return m_reply != nullptr || m_completeReply != nullptr; }
 
 signals:
-    void modelsListed(const QStringList &ids, const QString &error);
+    void modelsListed(const QString &backendId, const QStringList &ids, const QString &error);
     void modelProbed(const QString &model, bool vision, bool tools, bool thinking, bool audio,
                      bool advertised);
     void chunk(const QString &text);

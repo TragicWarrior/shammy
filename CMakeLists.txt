@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(shammy VERSION 0.9.3 LANGUAGES CXX)
+project(shammy VERSION 0.9.6 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -105,6 +105,7 @@ set(QML_FILES
     qml/components/ArtifactPopout.qml
     qml/components/ArtifactViewer.qml
     qml/components/SettingsToggleRow.qml
+    qml/components/ContextCombo.qml
     qml/components/CodeBlock.qml
     qml/components/SelectableMarkdown.qml
     qml/components/TableBlock.qml

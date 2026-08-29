@@ -48,18 +48,38 @@ SettingsController::SettingsController(Store *store, OpenAiClient *client, QObje
 
     connect(m_store, &Store::backendsChanged, this, &SettingsController::reloadBackends);
     connect(m_client, &OpenAiClient::modelsListed, this,
-            [this](const QStringList &ids, const QString &err)
+            [this](const QString &backendId, const QStringList &ids, const QString &err)
             {
-                m_loadingModels = false;
-                emit loadingModelsChanged();
-                m_modelsError = err;
-                emit modelsErrorChanged();
-                m_models.setIds(ids);
-                if (!ids.isEmpty() && (m_model.isEmpty() || !ids.contains(m_model)))
+                if (backendId.isEmpty())
                 {
-                    setCurrentModel(ids.first());
+                    return;
                 }
-                probeCurrentModel();
+                m_backendModels.insert(backendId, ids);
+                if (err.isEmpty())
+                {
+                    m_backendErrors.remove(backendId);
+                }
+                else
+                {
+                    m_backendErrors.insert(backendId, err);
+                }
+                m_pendingBackends.remove(backendId);
+                const bool complete = m_pendingBackends.isEmpty();
+                rebuildModelList(complete);
+                if (complete)
+                {
+                    m_loadingModels = false;
+                    emit loadingModelsChanged();
+                    QStringList errs;
+                    for (auto it = m_backendErrors.constBegin(); it != m_backendErrors.constEnd(); ++it)
+                    {
+                        const Backend b = m_store->backend(it.key());
+                        errs << (b.name.isEmpty() ? it.key() : b.name) + QStringLiteral(": ")
+                                    + it.value();
+                    }
+                    m_modelsError = errs.join(QLatin1Char('\n'));
+                    emit modelsErrorChanged();
+                }
             });
     connect(m_client, &OpenAiClient::modelProbed, this, &SettingsController::onModelProbed);
     refreshModels();
@@ -92,10 +112,12 @@ void SettingsController::setCurrentBackendId(const QString &id)
     m_backendId = id;
     m_store->setSetting(QStringLiteral("current_backend"), id);
     emit currentBackendIdChanged();
+    emit currentModelIndexChanged();
     emit defaultThinkingModeChanged();
     emit contextSizeChanged();
     emit modelCapsChanged();
-    refreshModels();
+    // The model list already spans all enabled backends, so switching the
+    // selected backend does not re-fetch models.
 }
 
 void SettingsController::setCurrentModel(const QString &m)
@@ -105,10 +127,65 @@ void SettingsController::setCurrentModel(const QString &m)
     m_model = m;
     m_qs.setValue(QStringLiteral("model"), m);
     emit currentModelChanged();
+    emit currentModelIndexChanged();
     emit defaultThinkingModeChanged();
     emit contextSizeChanged();
     emit modelCapsChanged();
     probeCurrentModel();
+}
+
+void SettingsController::setCurrentBackendModel(const QString &backendId, const QString &model)
+{
+    const bool backendChanged = m_backendId != backendId;
+    const bool modelChanged = m_model != model;
+    if (!backendChanged && !modelChanged)
+    {
+        return;
+    }
+    m_backendId = backendId;
+    m_model = model;
+    m_store->setSetting(QStringLiteral("current_backend"), backendId);
+    m_qs.setValue(QStringLiteral("model"), model);
+    if (backendChanged)
+    {
+        emit currentBackendIdChanged();
+    }
+    if (modelChanged)
+    {
+        emit currentModelChanged();
+    }
+    emit currentModelIndexChanged();
+    emit defaultThinkingModeChanged();
+    emit contextSizeChanged();
+    emit modelCapsChanged();
+    probeCurrentModel();
+}
+
+int SettingsController::currentModelIndex() const
+{
+    return m_models.indexOf(m_backendId, m_model);
+}
+
+bool SettingsController::anyModelThinking() const
+{
+    for (int i = 0; i < m_models.rowCount(); ++i)
+    {
+        if (m_models.at(i).thinking)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void SettingsController::selectModelIndex(int i)
+{
+    const ModelListModel::Entry e = m_models.at(i);
+    if (e.model.isEmpty())
+    {
+        return;
+    }
+    setCurrentBackendModel(e.backendId, e.model);
 }
 
 bool SettingsController::hasModel(const QString &name) const
@@ -243,7 +320,46 @@ QString SettingsController::contextKey() const
     {
         return QStringLiteral("modelContext/_default");
     }
-    return QStringLiteral("modelContext/%1/%2").arg(m_backendId, m_model);
+    return contextKeyFor(m_backendId, m_model);
+}
+
+QString SettingsController::contextKeyFor(const QString &backendId, const QString &model) const
+{
+    return QStringLiteral("modelContext/%1/%2").arg(backendId, model);
+}
+
+int SettingsController::contextSizeFor(const QString &backendId, const QString &model) const
+{
+    const int n = m_qs.value(contextKeyFor(backendId, model), 16384).toInt();
+    return n > 0 ? n : 16384;
+}
+
+void SettingsController::setModelContextFromText(const QString &backendId, const QString &model,
+                                                 const QString &text)
+{
+    if (backendId.isEmpty() || model.isEmpty())
+    {
+        return;
+    }
+    int n = parseContextSize(text);
+    if (n < 512)
+    {
+        n = 512;
+    }
+    if (n > 1048576)
+    {
+        n = 1048576;
+    }
+    m_qs.setValue(contextKeyFor(backendId, model), n);
+    const int row = m_models.indexOf(backendId, model);
+    if (row >= 0)
+    {
+        m_models.updateContext(row, n, formatContextSize(n));
+    }
+    if (backendId == m_backendId && model == m_model)
+    {
+        emit contextSizeChanged();
+    }
 }
 
 int SettingsController::parseContextSize(const QString &text)
@@ -286,6 +402,10 @@ int SettingsController::parseContextSize(const QString &text)
 
 QString SettingsController::formatContextSize(int n)
 {
+    if (n >= 1024 * 1024 && n % (1024 * 1024) == 0)
+    {
+        return QString::number(n / (1024 * 1024)) + QLatin1Char('M');
+    }
     if (n >= 1024 && n % 1024 == 0)
     {
         return QString::number(n / 1024) + QLatin1Char('K');
@@ -423,7 +543,13 @@ QString SettingsController::resolveOfficeBinary(const QString &overridePath) con
 
 QString SettingsController::capUserKey(const QString &feat) const
 {
-    return QStringLiteral("modelCapsUser/%1/%2/%3").arg(m_backendId, m_model, feat);
+    return capUserKeyFor(m_backendId, m_model, feat);
+}
+
+QString SettingsController::capUserKeyFor(const QString &backendId, const QString &model,
+                                          const QString &feat) const
+{
+    return QStringLiteral("modelCapsUser/%1/%2/%3").arg(backendId, model, feat);
 }
 
 QString SettingsController::capHintKey(const QString &backendId, const QString &model,
@@ -443,15 +569,109 @@ bool SettingsController::capHint(const QString &feat) const
 
 bool SettingsController::capEffective(const QString &feat) const
 {
-    if (m_backendId.isEmpty() || m_model.isEmpty())
+    return capEffectiveFor(m_backendId, m_model, feat);
+}
+
+bool SettingsController::capEffectiveFor(const QString &backendId, const QString &model,
+                                         const QString &feat) const
+{
+    if (backendId.isEmpty() || model.isEmpty())
     {
         return false;
     }
-    if (m_qs.contains(capUserKey(feat)))
+    const QString uk = capUserKeyFor(backendId, model, feat);
+    if (m_qs.contains(uk))
     {
-        return m_qs.value(capUserKey(feat)).toBool();
+        return m_qs.value(uk).toBool();
     }
-    return capHint(feat);
+    const QString hk = capHintKey(backendId, model, feat);
+    if (m_qs.contains(hk))
+    {
+        return m_qs.value(hk).toBool();
+    }
+    // No probe or stored hint yet: fall back to the name-based guess so the
+    // matrix shows a sensible default the user can accept or override.
+    const ModelCaps g = capsFromModelId(model);
+    if (feat == QLatin1String("vision"))
+    {
+        return g.vision;
+    }
+    if (feat == QLatin1String("tools"))
+    {
+        return g.tools;
+    }
+    if (feat == QLatin1String("thinking"))
+    {
+        return g.thinking;
+    }
+    if (feat == QLatin1String("audio"))
+    {
+        return g.audio;
+    }
+    return false;
+}
+
+bool SettingsController::advertisedFor(const QString &backendId, const QString &model) const
+{
+    return m_qs.value(QStringLiteral("modelCapsHintSource/%1/%2").arg(backendId, model)).toString()
+        == QLatin1String("ollama");
+}
+
+bool SettingsController::overriddenFor(const QString &backendId, const QString &model) const
+{
+    return m_qs.contains(capUserKeyFor(backendId, model, QStringLiteral("vision")))
+        || m_qs.contains(capUserKeyFor(backendId, model, QStringLiteral("tools")))
+        || m_qs.contains(capUserKeyFor(backendId, model, QStringLiteral("thinking")))
+        || m_qs.contains(capUserKeyFor(backendId, model, QStringLiteral("audio")));
+}
+
+void SettingsController::refreshModelCaps(const QString &backendId, const QString &model)
+{
+    const int row = m_models.indexOf(backendId, model);
+    if (row < 0)
+    {
+        return;
+    }
+    m_models.updateCaps(row, capEffectiveFor(backendId, model, QStringLiteral("vision")),
+                        capEffectiveFor(backendId, model, QStringLiteral("tools")),
+                        capEffectiveFor(backendId, model, QStringLiteral("thinking")),
+                        capEffectiveFor(backendId, model, QStringLiteral("audio")),
+                        advertisedFor(backendId, model), overriddenFor(backendId, model));
+}
+
+void SettingsController::setModelCap(const QString &backendId, const QString &model,
+                                     const QString &feat, bool value)
+{
+    if (backendId.isEmpty() || model.isEmpty())
+    {
+        return;
+    }
+    m_qs.setValue(capUserKeyFor(backendId, model, feat), value);
+    refreshModelCaps(backendId, model);
+    emit modelsChanged();
+    if (backendId == m_backendId && model == m_model)
+    {
+        emit modelCapsChanged();
+    }
+}
+
+void SettingsController::resetModelCapsFor(const QString &backendId, const QString &model)
+{
+    if (backendId.isEmpty() || model.isEmpty())
+    {
+        return;
+    }
+    for (const QString &feat : {QStringLiteral("vision"), QStringLiteral("tools"),
+                                QStringLiteral("thinking"), QStringLiteral("audio")})
+    {
+        m_qs.remove(capUserKeyFor(backendId, model, feat));
+    }
+    refreshModelCaps(backendId, model);
+    emit modelsChanged();
+    if (backendId == m_backendId && model == m_model)
+    {
+        emit modelCapsChanged();
+    }
 }
 
 void SettingsController::setCapUser(const QString &feat, bool v)
@@ -618,6 +838,8 @@ void SettingsController::onModelProbed(const QString &model, bool vision, bool t
     m_qs.setValue(capHintKey(backendId, model, QStringLiteral("audio")), audio);
     m_qs.setValue(QStringLiteral("modelCapsHintSource/%1/%2").arg(backendId, model),
                   advertised ? QStringLiteral("ollama") : QStringLiteral("name"));
+    refreshModelCaps(backendId, model);
+    emit modelsChanged();
     if (backendId == m_backendId && model == m_model)
     {
         emit modelCapsChanged();
@@ -647,17 +869,82 @@ bool SettingsController::hasWebEngine() const
 
 void SettingsController::refreshModels()
 {
-    const Backend b = currentBackend();
-    if (b.baseUrl.isEmpty())
+    m_backendModels.clear();
+    m_backendErrors.clear();
+    m_pendingBackends.clear();
+
+    const QList<Backend> all = m_store->backends();
+    QList<Backend> enabled;
+    for (const Backend &b : all)
     {
-        m_models.setIds({});
-        m_modelsError = QStringLiteral("No backend URL");
+        if (b.enabled && !b.baseUrl.trimmed().isEmpty())
+        {
+            enabled.append(b);
+        }
+    }
+    if (enabled.isEmpty())
+    {
+        rebuildModelList(true);
+        m_modelsError = all.isEmpty() ? QStringLiteral("No backends configured")
+                                      : QStringLiteral("No enabled backend has a URL");
         emit modelsErrorChanged();
+        m_loadingModels = false;
+        emit loadingModelsChanged();
         return;
     }
+    m_modelsError.clear();
+    emit modelsErrorChanged();
     m_loadingModels = true;
     emit loadingModelsChanged();
-    m_client->listModels(b.baseUrl, b.apiKey);
+    for (const Backend &b : enabled)
+    {
+        m_pendingBackends.insert(b.id);
+        m_client->listModels(b.baseUrl, b.apiKey, b.id);
+    }
+}
+
+void SettingsController::rebuildModelList(bool complete)
+{
+    QList<ModelListModel::Entry> entries;
+    for (const Backend &b : m_store->backends())
+    {
+        if (!b.enabled)
+        {
+            continue;
+        }
+        for (const QString &m : m_backendModels.value(b.id))
+        {
+            ModelListModel::Entry e;
+            e.backendId = b.id;
+            e.backendName = b.name;
+            e.model = m;
+            e.vision = capEffectiveFor(b.id, m, QStringLiteral("vision"));
+            e.tools = capEffectiveFor(b.id, m, QStringLiteral("tools"));
+            e.thinking = capEffectiveFor(b.id, m, QStringLiteral("thinking"));
+            e.audio = capEffectiveFor(b.id, m, QStringLiteral("audio"));
+            e.advertised = advertisedFor(b.id, m);
+            e.overridden = overriddenFor(b.id, m);
+            e.context = contextSizeFor(b.id, m);
+            e.contextLabel = formatContextSize(e.context);
+            entries.append(e);
+        }
+    }
+    m_models.setEntries(entries);
+    emit currentModelIndexChanged();
+    emit modelsChanged();
+    if (!complete)
+    {
+        return;
+    }
+    // All enabled backends have reported: settle the selection.
+    if (m_models.indexOf(m_backendId, m_model) < 0 && !entries.isEmpty())
+    {
+        setCurrentBackendModel(entries.first().backendId, entries.first().model);
+    }
+    else
+    {
+        probeCurrentModel();
+    }
 }
 
 void SettingsController::saveBackend(const QString &id, const QString &name, const QString &url,
@@ -673,8 +960,7 @@ void SettingsController::saveBackend(const QString &id, const QString &name, con
     b.baseUrl = url;
     b.apiKey = apiKey;
     m_store->upsertBackend(b);
-    if (m_backendId == b.id)
-        refreshModels();
+    refreshModels();
 }
 
 void SettingsController::addBackend()
@@ -685,16 +971,15 @@ void SettingsController::addBackend()
     b.baseUrl = QStringLiteral("http://127.0.0.1:11434/v1");
     b.createdAt = nowMs();
     m_store->upsertBackend(b);
+    refreshModels();
 }
 
 void SettingsController::removeBackend(const QString &id)
 {
     m_store->deleteBackend(id);
-    if (m_backendId == id)
-    {
-        const auto all = m_store->backends();
-        setCurrentBackendId(all.isEmpty() ? QString() : all.first().id);
-    }
+    // The aggregate model list is rebuilt across the remaining enabled backends;
+    // if the current selection lived on the removed backend it is re-pointed.
+    refreshModels();
 }
 
 QString SettingsController::makeId() const
@@ -712,12 +997,13 @@ QVariantList SettingsController::backendSnapshot() const
         row.insert(QStringLiteral("name"), b.name);
         row.insert(QStringLiteral("baseUrl"), b.baseUrl);
         row.insert(QStringLiteral("apiKey"), b.apiKey);
+        row.insert(QStringLiteral("enabled"), b.enabled);
         out.append(row);
     }
     return out;
 }
 
-void SettingsController::applyBackendSnapshot(const QVariantList &rows, const QString &activeId)
+void SettingsController::applyBackendSnapshot(const QVariantList &rows)
 {
     QSet<QString> keep;
     for (const QVariant &v : rows)
@@ -736,6 +1022,7 @@ void SettingsController::applyBackendSnapshot(const QVariantList &rows, const QS
         b.name = m.value(QStringLiteral("name")).toString();
         b.baseUrl = m.value(QStringLiteral("baseUrl")).toString();
         b.apiKey = m.value(QStringLiteral("apiKey")).toString();
+        b.enabled = m.value(QStringLiteral("enabled"), true).toBool();
         keep.insert(b.id);
         m_store->upsertBackend(b);
     }
@@ -747,15 +1034,8 @@ void SettingsController::applyBackendSnapshot(const QVariantList &rows, const QS
             m_store->deleteBackend(b.id);
         }
     }
-    QString active = activeId;
-    if ((active.isEmpty() || !keep.contains(active)) && !rows.isEmpty())
-    {
-        active = rows.first().toMap().value(QStringLiteral("backendId")).toString();
-    }
-    if (!active.isEmpty())
-    {
-        setCurrentBackendId(active);
-    }
     reloadBackends();
+    // Re-fan-out across the new set of enabled backends; rebuildModelList settles
+    // the current selection (auto-picks if it no longer exists).
     refreshModels();
 }

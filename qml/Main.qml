@@ -90,12 +90,26 @@ ApplicationWindow {
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.left: parent.left
                         anchors.leftMargin: 16
-                        implicitWidth: Math.min(320, modelLabel.implicitWidth + 36)
+                        implicitWidth: Math.min(360, modelLabel.implicitWidth + 36)
                         width: implicitWidth
                         model: settings.models
-                        textRole: "name"
-                        displayText: settings.currentModel.length ? settings.currentModel : "Select model"
-                        onActivated: settings.currentModel = currentText
+                        textRole: "label"
+                        currentIndex: settings.currentModelIndex
+                        displayText: {
+                            if (!settings.currentModel.length)
+                                return "Select model"
+                            return settings.currentBackendName.length
+                                ? (settings.currentBackendName + " / " + settings.currentModel)
+                                : settings.currentModel
+                        }
+                        onActivated: settings.selectModelIndex(currentIndex)
+                        Connections {
+                            target: settings
+                            function onCurrentModelIndexChanged() {
+                                if (modelBox.currentIndex !== settings.currentModelIndex)
+                                    modelBox.currentIndex = settings.currentModelIndex
+                            }
+                        }
                         background: Rectangle {
                             implicitHeight: 32
                             color: modelBox.hovered || modelBox.down ? Theme.hover : "transparent"

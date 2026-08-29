@@ -225,10 +225,14 @@ QString ChatController::emptyHint() const
 QString ChatController::conversationProjectName() const
 {
     if (m_private || m_convId.isEmpty())
+    {
         return {};
+    }
     const Conversation c = m_store->conversation(m_convId);
     if (c.projectId.isEmpty())
+    {
         return {};
+    }
     return m_store->project(c.projectId).name;
 }
 
@@ -269,9 +273,13 @@ void ChatController::reloadHistory()
         for (const Conversation &c : m_store->conversations(projectId))
         {
             if (c.pinned)
+            {
                 pfav.append(c);
+            }
             else
+            {
                 prest.append(c);
+            }
         }
     }
     m_projectFavorites.setItems(pfav);
@@ -496,7 +504,9 @@ void ChatController::openConversation(const QString &id)
 {
     // Already viewing the conversation that is generating: nothing to do.
     if (m_genAttached && id == m_genConvId)
+    {
         return;
+    }
     if (m_compacting)
         stop();
 
@@ -509,9 +519,13 @@ void ChatController::openConversation(const QString &id)
         // A private generation isn't in history and can never be re-attached, so
         // don't leave it running in the background — end it on switch.
         if (m_genPrivate)
+        {
             stop();
+        }
         else
+        {
             detachGeneration();
+        }
     }
 
     m_private = false;
@@ -549,17 +563,10 @@ void ChatController::openConversation(const QString &id)
         }
     }
     const Conversation c = m_store->conversation(id);
-    const QString model = m_settings->availableModel(c.model);
-    if (!model.isEmpty())
-        m_settings->setCurrentModel(model);
-    if (!c.model.isEmpty() && model != c.model && !m_settings->models()->ids().isEmpty())
-    {
-        Conversation u = c;
-        u.model = model;
-        m_store->upsertConversation(u);
-    }
-    if (!c.backendId.isEmpty())
-        m_settings->setCurrentBackendId(c.backendId);
+    // Restore this chat's exact backend+model pairing.
+    const QString convBackend = c.backendId.isEmpty() ? m_settings->currentBackendId() : c.backendId;
+    const QString convModel = c.model.isEmpty() ? m_settings->currentModel() : c.model;
+    m_settings->setCurrentBackendModel(convBackend, convModel);
     m_thinkingMode = c.reasoningEffort;
     emit thinkingModeChanged();
     emit conversationChanged();
@@ -1177,7 +1184,9 @@ void ChatController::send()
     // the background elsewhere (single network client); its partial reply is
     // already persisted by stop().
     if (!m_genConvId.isEmpty())
+    {
         stop();
+    }
 
     ensureConversation();
     if (!m_private)
@@ -1234,9 +1243,13 @@ void ChatController::beginAssistant()
 void ChatController::genAppend(const ChatMessage &m)
 {
     if (m_genAttached)
+    {
         m_messages.append(m);
+    }
     else
+    {
         m_genMessages.append(m);
+    }
 }
 
 void ChatController::genAppendAssistantDelta(const QString &text)
@@ -1256,31 +1269,45 @@ void ChatController::genAppendAssistantDelta(const QString &text)
 void ChatController::genAppendReasoningDelta(const QString &text)
 {
     if (m_genAttached)
+    {
         m_messages.appendReasoningDelta(text);
+    }
     else if (!m_genMessages.isEmpty())
+    {
         m_genMessages.last().reasoning += text;
+    }
 }
 
 void ChatController::genFinishLast()
 {
     if (m_genAttached)
+    {
         m_messages.finishLast();
+    }
     else if (!m_genMessages.isEmpty())
+    {
         m_genMessages.last().streaming = false;
+    }
 }
 
 void ChatController::genSetLastToolCalls(const QString &json)
 {
     if (m_genAttached)
+    {
         m_messages.setLastToolCalls(json);
+    }
     else if (!m_genMessages.isEmpty())
+    {
         m_genMessages.last().toolCallsJson = json;
+    }
 }
 
 ChatMessage ChatController::genLast() const
 {
     if (m_genAttached)
+    {
         return m_messages.last();
+    }
     return m_genMessages.isEmpty() ? ChatMessage() : m_genMessages.last();
 }
 
@@ -1472,7 +1499,9 @@ void ChatController::onChunk(const QString &text)
 {
     genAppendAssistantDelta(text);
     if (!m_genAttached)
+    {
         return;
+    }
     const int used = m_contextUsed + estimateTokens(text);
     if (used != m_contextUsed)
     {
@@ -1485,7 +1514,9 @@ void ChatController::onReasoning(const QString &text)
 {
     genAppendReasoningDelta(text);
     if (!m_genAttached)
+    {
         return;
+    }
     const int used = m_contextUsed + estimateTokens(text);
     if (used != m_contextUsed)
     {
@@ -1538,9 +1569,13 @@ void ChatController::persistLastAssistant()
     Conversation c = m_store->conversation(m_genConvId);
     c.updatedAt = nowMs();
     if (!m_genModel.isEmpty())
+    {
         c.model = m_genModel;
+    }
     if (!m_genBackendId.isEmpty())
+    {
         c.backendId = m_genBackendId;
+    }
     c.reasoningEffort = m_genThinking;
     m_store->upsertConversation(c);
 }
@@ -1578,7 +1613,9 @@ void ChatController::extractArtifactsFrom(const ChatMessage &m)
             m_store->insertArtifact(a);
         }
         if (visible)
+        {
             loadArtifacts();
+        }
     }
     else if (!visible)
     {
@@ -1803,7 +1840,9 @@ void ChatController::writePreviewFile()
     // doesn't needlessly reload (e.g. when the pane is reopened on the same
     // artifact). m_previewUrl already reflects this html.
     if (html == m_previewHtml)
+    {
         return;
+    }
     m_previewHtml = html;
     QUrl next;
     if (!html.isEmpty())
@@ -1984,7 +2023,9 @@ void ChatController::onFailed(const QString &err)
     genFinishLast();
     persistLastAssistant();
     if (m_genAttached)
+    {
         setError(err);
+    }
     endGeneration();
 }
 
@@ -2046,7 +2087,9 @@ void ChatController::finishToolMessage(const QString &toolCallId, const QString 
     // A tool call can resolve after its generation was stopped or superseded
     // (async MCP/web callback). Drop the late result instead of resurrecting it.
     if (m_genConvId.isEmpty())
+    {
         return;
+    }
     ChatMessage tm;
     tm.id = newId();
     tm.conversationId = m_genConvId;
@@ -2056,7 +2099,9 @@ void ChatController::finishToolMessage(const QString &toolCallId, const QString 
     tm.createdAt = nowMs();
     genAppend(tm);
     if (!m_genPrivate && !m_genConvId.isEmpty())
+    {
         m_store->upsertMessage(tm);
+    }
     setToolActivity({});
     ++m_pendingToolI;
     runPendingTools();
@@ -2195,7 +2240,9 @@ void ChatController::regenerate()
     if (m_streaming || m_compacting || m_convId.isEmpty())
         return;
     if (!m_genConvId.isEmpty())
+    {
         stop();
+    }
     auto all = m_messages.all();
     int lastUser = -1;
     for (int i = all.size() - 1; i >= 0; --i)
@@ -2225,7 +2272,9 @@ void ChatController::editAndResend(const QString &messageId, const QString &newT
     if (m_streaming || m_compacting)
         return;
     if (!m_genConvId.isEmpty())
+    {
         stop();
+    }
     auto all = m_messages.all();
     int idx = -1;
     for (int i = 0; i < all.size(); ++i)
@@ -2261,7 +2310,9 @@ void ChatController::renameConversation(const QString &id, const QString &title)
 void ChatController::deleteConversation(const QString &id)
 {
     if (id == m_genConvId)
+    {
         stop();
+    }
     m_store->deleteConversation(id);
     if (m_convId == id)
         newChat();
@@ -2287,7 +2338,9 @@ void ChatController::moveToProject(const QString &id, const QString &projectId)
     c.updatedAt = nowMs();
     m_store->upsertConversation(c);
     if (id == m_convId)
+    {
         emit conversationChanged();
+    }
 }
 
 void ChatController::setCompactStatus(const QString &s)
