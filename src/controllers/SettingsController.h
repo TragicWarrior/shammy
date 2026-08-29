@@ -4,8 +4,11 @@
 #include "openai/OpenAiClient.h"
 #include "persist/Store.h"
 
+#include <QMap>
 #include <QObject>
+#include <QSet>
 #include <QSettings>
+#include <QStringList>
 #include <QVariantList>
 
 class SettingsController : public QObject
@@ -15,6 +18,8 @@ class SettingsController : public QObject
     Q_PROPERTY(ModelListModel *models READ models CONSTANT)
     Q_PROPERTY(QString currentBackendId READ currentBackendId WRITE setCurrentBackendId NOTIFY currentBackendIdChanged)
     Q_PROPERTY(QString currentModel READ currentModel WRITE setCurrentModel NOTIFY currentModelChanged)
+    Q_PROPERTY(int currentModelIndex READ currentModelIndex NOTIFY currentModelIndexChanged)
+    Q_PROPERTY(bool anyModelThinking READ anyModelThinking NOTIFY modelsChanged)
     Q_PROPERTY(QString currentBackendName READ currentBackendName NOTIFY currentBackendIdChanged)
     Q_PROPERTY(QString currentBaseUrl READ currentBaseUrl NOTIFY currentBackendIdChanged)
     Q_PROPERTY(double temperature READ temperature WRITE setTemperature NOTIFY samplingChanged)
@@ -59,6 +64,10 @@ public:
     void setCurrentBackendId(const QString &id);
     QString currentModel() const { return m_model; }
     void setCurrentModel(const QString &m);
+    int currentModelIndex() const;
+    bool anyModelThinking() const;
+    void setCurrentBackendModel(const QString &backendId, const QString &model);
+    Q_INVOKABLE void selectModelIndex(int i);
     bool hasModel(const QString &name) const;
     QString availableModel(const QString &preferred = {}) const;
     QString currentBackendName() const;
@@ -78,6 +87,8 @@ public:
     void setContextSize(int n);
     QString contextSizeLabel() const;
     Q_INVOKABLE void setContextSizeFromText(const QString &text);
+    Q_INVOKABLE void setModelContextFromText(const QString &backendId, const QString &model,
+                                             const QString &text);
     static int parseContextSize(const QString &text);
     static QString formatContextSize(int n);
     bool darkTheme() const { return m_dark; }
@@ -124,6 +135,10 @@ public:
     QString modelCapsSource() const;
     bool modelCapsOverridden() const;
     Q_INVOKABLE void resetModelCaps();
+    // Per-(backend, model) capability configuration for the model matrix.
+    Q_INVOKABLE void setModelCap(const QString &backendId, const QString &model, const QString &feat,
+                                 bool value);
+    Q_INVOKABLE void resetModelCapsFor(const QString &backendId, const QString &model);
     bool webSearchEnabled() const { return m_webSearchEnabled; }
     void setWebSearchEnabled(bool v);
     QString webSearchProvider() const { return m_webSearchProvider; }
@@ -139,11 +154,13 @@ public:
     Q_INVOKABLE void removeBackend(const QString &id);
     Q_INVOKABLE QString makeId() const;
     Q_INVOKABLE QVariantList backendSnapshot() const;
-    Q_INVOKABLE void applyBackendSnapshot(const QVariantList &rows, const QString &activeId);
+    Q_INVOKABLE void applyBackendSnapshot(const QVariantList &rows);
 
 signals:
     void currentBackendIdChanged();
     void currentModelChanged();
+    void currentModelIndexChanged();
+    void modelsChanged();
     void samplingChanged();
     void defaultThinkingModeChanged();
     void contextSizeChanged();
@@ -164,12 +181,20 @@ signals:
 
 private:
     void reloadBackends();
+    void rebuildModelList(bool complete);
     QString reasoningKey() const;
     QString thinkDefaultKey() const;
     QString contextKey() const;
+    QString contextKeyFor(const QString &backendId, const QString &model) const;
+    int contextSizeFor(const QString &backendId, const QString &model) const;
     QString capUserKey(const QString &feat) const;
+    QString capUserKeyFor(const QString &backendId, const QString &model, const QString &feat) const;
     QString capHintKey(const QString &backendId, const QString &model, const QString &feat) const;
     bool capEffective(const QString &feat) const;
+    bool capEffectiveFor(const QString &backendId, const QString &model, const QString &feat) const;
+    bool advertisedFor(const QString &backendId, const QString &model) const;
+    bool overriddenFor(const QString &backendId, const QString &model) const;
+    void refreshModelCaps(const QString &backendId, const QString &model);
     bool capHint(const QString &feat) const;
     void setCapUser(const QString &feat, bool v);
     void probeCurrentModel();
@@ -180,6 +205,9 @@ private:
     OpenAiClient *m_client = nullptr;
     BackendListModel m_backends;
     ModelListModel m_models;
+    QMap<QString, QStringList> m_backendModels;
+    QMap<QString, QString> m_backendErrors;
+    QSet<QString> m_pendingBackends;
     QString m_backendId;
     QString m_model;
     double m_temperature = 0.7;

@@ -18,6 +18,8 @@ static Backend backendFromQuery(const QSqlQuery &q)
     b.baseUrl = q.value(QStringLiteral("base_url")).toString();
     b.apiKey = q.value(QStringLiteral("api_key")).toString();
     b.extraHeadersJson = q.value(QStringLiteral("extra_headers_json")).toString();
+    const QVariant en = q.value(QStringLiteral("enabled"));
+    b.enabled = en.isNull() ? true : en.toInt() != 0;
     b.createdAt = q.value(QStringLiteral("created_at")).toLongLong();
     return b;
 }
@@ -161,8 +163,12 @@ bool Store::migrate()
     if (!exec(QStringLiteral(
             "CREATE TABLE IF NOT EXISTS backends ("
             "id TEXT PRIMARY KEY, name TEXT, base_url TEXT, api_key TEXT,"
-            "extra_headers_json TEXT, created_at INTEGER)")))
+            "extra_headers_json TEXT, created_at INTEGER, enabled INTEGER DEFAULT 1)")))
         return false;
+    if (!tableHasColumn(m_db, QStringLiteral("backends"), QStringLiteral("enabled")))
+    {
+        exec(QStringLiteral("ALTER TABLE backends ADD COLUMN enabled INTEGER DEFAULT 1"));
+    }
     if (!exec(QStringLiteral(
             "CREATE TABLE IF NOT EXISTS projects ("
             "id TEXT PRIMARY KEY, name TEXT, instructions TEXT,"
@@ -282,16 +288,18 @@ void Store::upsertBackend(const Backend &b)
 {
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral(
-        "INSERT INTO backends(id,name,base_url,api_key,extra_headers_json,created_at) "
-        "VALUES(?,?,?,?,?,?) "
+        "INSERT INTO backends(id,name,base_url,api_key,extra_headers_json,created_at,enabled) "
+        "VALUES(?,?,?,?,?,?,?) "
         "ON CONFLICT(id) DO UPDATE SET name=excluded.name, base_url=excluded.base_url, "
-        "api_key=excluded.api_key, extra_headers_json=excluded.extra_headers_json"));
+        "api_key=excluded.api_key, extra_headers_json=excluded.extra_headers_json, "
+        "enabled=excluded.enabled"));
     q.addBindValue(b.id);
     q.addBindValue(b.name);
     q.addBindValue(b.baseUrl);
     q.addBindValue(b.apiKey);
     q.addBindValue(b.extraHeadersJson);
     q.addBindValue(b.createdAt ? b.createdAt : nowMs());
+    q.addBindValue(b.enabled ? 1 : 0);
     q.exec();
     emit backendsChanged();
 }

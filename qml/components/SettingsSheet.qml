@@ -28,7 +28,6 @@ Popup {
         property double topP: 1.0
         property int maxTokens: 0
         property string thinkDefault: ""
-        property string contextSizeText: "16K"
         property bool showReasoning: true
         property bool showToolInsights: false
         property bool showArtifactInsights: false
@@ -37,12 +36,6 @@ Popup {
         property bool includeLocalTime: true
         property string officeBinaryPath: ""
         property int compactionThreshold: 80
-        property bool vision: false
-        property bool tools: false
-        property bool thinking: false
-        property bool audio: false
-        property bool capsTouched: false
-        property string activeBackendId: ""
         property bool webSearchEnabled: false
         property string webSearchProvider: "brave"
         property string webSearchApiKey: ""
@@ -54,7 +47,6 @@ Popup {
         draft.topP = settings.topP
         draft.maxTokens = settings.maxTokens
         draft.thinkDefault = settings.defaultThinkingMode
-        draft.contextSizeText = settings.contextSizeLabel
         draft.showReasoning = settings.showReasoning
         draft.showToolInsights = settings.showToolInsights
         draft.showArtifactInsights = settings.showArtifactInsights
@@ -65,7 +57,6 @@ Popup {
         if (officePathField)
             officePathField.text = draft.officeBinaryPath
         draft.compactionThreshold = settings.compactionThreshold
-        draft.activeBackendId = settings.currentBackendId
         draft.webSearchEnabled = settings.webSearchEnabled
         draft.webSearchProvider = settings.webSearchProvider
         draft.webSearchApiKey = settings.webSearchApiKey
@@ -77,17 +68,6 @@ Popup {
         const servers = mcp.serverSnapshot()
         for (let i = 0; i < servers.length; ++i)
             draftMcp.append(servers[i])
-        if (ctxCombo)
-            ctxCombo.editText = draft.contextSizeText
-        loadCapDraft()
-    }
-
-    function loadCapDraft() {
-        draft.vision = settings.modelVision
-        draft.tools = settings.modelTools
-        draft.thinking = settings.modelThinking
-        draft.audio = settings.modelAudio
-        draft.capsTouched = false
     }
 
     function saveDraft() {
@@ -96,7 +76,6 @@ Popup {
         settings.topP = draft.topP
         settings.maxTokens = draft.maxTokens
         settings.defaultThinkingMode = draft.thinkDefault
-        settings.setContextSizeFromText(ctxCombo.editText.length ? ctxCombo.editText : draft.contextSizeText)
         settings.showReasoning = draft.showReasoning
         settings.showToolInsights = draft.showToolInsights
         settings.showArtifactInsights = draft.showArtifactInsights
@@ -108,12 +87,6 @@ Popup {
         settings.webSearchEnabled = draft.webSearchEnabled
         settings.webSearchProvider = draft.webSearchProvider
         settings.webSearchApiKey = draft.webSearchApiKey
-        if (draft.capsTouched) {
-            settings.modelVision = draft.vision
-            settings.modelTools = draft.tools
-            settings.modelThinking = draft.thinking
-            settings.modelAudio = draft.audio
-        }
         const backends = []
         for (let i = 0; i < draftBackends.count; ++i) {
             const r = draftBackends.get(i)
@@ -121,10 +94,11 @@ Popup {
                               backendId: r.backendId,
                               name: r.name,
                               baseUrl: r.baseUrl,
-                              apiKey: r.apiKey
+                              apiKey: r.apiKey,
+                              enabled: r.enabled
                           })
         }
-        settings.applyBackendSnapshot(backends, draft.activeBackendId)
+        settings.applyBackendSnapshot(backends)
         const servers = []
         for (let i = 0; i < draftMcp.count; ++i) {
             const s = draftMcp.get(i)
@@ -155,14 +129,6 @@ Popup {
             draft.officeBinaryPath = p
             if (officePathField)
                 officePathField.text = p
-        }
-    }
-
-    Connections {
-        target: settings
-        function onModelCapsChanged() {
-            if (!draft.capsTouched)
-                loadCapDraft()
         }
     }
 
@@ -524,243 +490,6 @@ Popup {
                         Item { Layout.preferredHeight: 4 }
 
                         Text {
-                            text: "Current model"
-                            color: Theme.text
-                            font.pixelSize: 15
-                            font.weight: Font.DemiBold
-                            Layout.leftMargin: 24
-                        }
-                        Text {
-                            text: settings.currentModel.length
-                                  ? settings.currentModel
-                                  : "No model selected"
-                            color: Theme.muted
-                            font.pixelSize: 13
-                            Layout.leftMargin: 24
-                        }
-                        Text {
-                            text: "Context size"
-                            color: Theme.muted
-                            font.pixelSize: 12
-                            Layout.leftMargin: 24
-                            Layout.topMargin: 8
-                        }
-                        ComboBox {
-                            id: ctxCombo
-                            Layout.leftMargin: 24
-                            Layout.preferredWidth: 180
-                            implicitHeight: 36
-                            padding: 0
-                            editable: true
-                            model: ["2K", "4K", "8K", "16K", "32K", "64K", "128K", "256K"]
-                            enabled: settings.currentModel.length > 0
-                            Component.onCompleted: editText = draft.contextSizeText
-                            onActivated: draft.contextSizeText = currentText
-                            onAccepted: draft.contextSizeText = editText
-                            background: Rectangle {
-                                implicitHeight: 36
-                                color: Theme.panel
-                                radius: 8
-                                border.color: Theme.border
-                                border.width: 1
-                            }
-                            contentItem: TextField {
-                                leftPadding: 12
-                                rightPadding: 40
-                                topPadding: 0
-                                bottomPadding: 0
-                                text: ctxCombo.editText
-                                color: Theme.text
-                                font.pixelSize: 13
-                                verticalAlignment: Text.AlignVCenter
-                                enabled: ctxCombo.editable
-                                autoScroll: ctxCombo.editable
-                                readOnly: ctxCombo.down
-                                selectionColor: Theme.selected
-                                selectedTextColor: Theme.text
-                                background: Item {}
-                            }
-                            indicator: Item {
-                                implicitWidth: 36
-                                implicitHeight: 36
-                                x: ctxCombo.width - width
-                                y: 0
-                                z: 10
-                                clip: true
-                                Rectangle {
-                                    anchors.fill: parent
-                                    anchors.leftMargin: -8
-                                    radius: 8
-                                    color: Theme.text
-                                }
-                                Canvas {
-                                    id: ctxChevron
-                                    width: 12
-                                    height: 7
-                                    anchors.centerIn: parent
-                                    onPaint: {
-                                        const c = getContext("2d")
-                                        c.reset()
-                                        c.fillStyle = Theme.bg
-                                        c.beginPath()
-                                        c.moveTo(0, 0)
-                                        c.lineTo(12, 0)
-                                        c.lineTo(6, 7)
-                                        c.closePath()
-                                        c.fill()
-                                    }
-                                    Component.onCompleted: requestPaint()
-                                    Connections {
-                                        target: Theme
-                                        function onDarkChanged() { ctxChevron.requestPaint() }
-                                    }
-                                }
-                            }
-                        }
-                        Text {
-                            text: "Tokens in the context window (powers of two, or type any size like 24576)."
-                            color: Theme.muted
-                            font.pixelSize: 12
-                            wrapMode: Text.Wrap
-                            Layout.fillWidth: true
-                            Layout.leftMargin: 24
-                            Layout.rightMargin: 24
-                        }
-
-                        Text {
-                            text: "Capabilities"
-                            color: Theme.text
-                            font.pixelSize: 15
-                            font.weight: Font.DemiBold
-                            Layout.leftMargin: 24
-                            Layout.topMargin: 8
-                        }
-                        Text {
-                            text: settings.modelCapsSource
-                            color: Theme.muted
-                            font.pixelSize: 12
-                            wrapMode: Text.Wrap
-                            Layout.fillWidth: true
-                            Layout.leftMargin: 24
-                            Layout.rightMargin: 24
-                        }
-                        Text {
-                            visible: settings.modelCapsOverridden
-                            text: "Reset to hint"
-                            color: Theme.text
-                            font.pixelSize: 12
-                            Layout.leftMargin: 24
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    settings.resetModelCaps()
-                                    loadCapDraft()
-                                }
-                            }
-                        }
-                        Repeater {
-                            model: [
-                                { key: "vision", label: "Vision", help: "Images in the composer. Turn off if this model cannot see." },
-                                { key: "tools", label: "Tools", help: "Send MCP tools with chat requests." },
-                                { key: "audio", label: "Audio", help: "This model can take audio. No microphone in the composer yet." }
-                            ]
-                            Rectangle {
-                                required property var modelData
-                                Layout.fillWidth: true
-                                Layout.leftMargin: 24
-                                Layout.rightMargin: 24
-                                radius: 12
-                                color: Theme.panel
-                                implicitHeight: capRow.height + 24
-                                enabled: settings.currentModel.length > 0
-                                opacity: enabled ? 1 : 0.5
-                                readonly property bool capOn: modelData.key === "vision" ? draft.vision
-                                    : modelData.key === "tools" ? draft.tools
-                                    : modelData.key === "thinking" ? draft.thinking
-                                    : draft.audio
-                                SettingsToggleRow {
-                                    id: capRow
-                                    x: 16
-                                    y: 12
-                                    width: parent.width - 32
-                                    title: modelData.label
-                                    help: modelData.help
-                                    checked: capOn
-                                    onToggled: {
-                                        const v = !capOn
-                                        if (modelData.key === "vision") draft.vision = v
-                                        else if (modelData.key === "tools") draft.tools = v
-                                        else if (modelData.key === "thinking") draft.thinking = v
-                                        else draft.audio = v
-                                        draft.capsTouched = true
-                                    }
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.leftMargin: 24
-                            Layout.rightMargin: 24
-                            radius: 12
-                            color: Theme.panel
-                            implicitHeight: thinkCapCol.height + 24
-                            enabled: settings.currentModel.length > 0
-                            opacity: enabled ? 1 : 0.5
-                            ColumnLayout {
-                                id: thinkCapCol
-                                x: 16
-                                y: 12
-                                width: parent.width - 32
-                                spacing: 8
-                                SettingsToggleRow {
-                                    Layout.fillWidth: true
-                                    title: "Thinking"
-                                    help: "Show Think on the prompt. The default below applies to new chats; you can still change it per message."
-                                    checked: draft.thinking
-                                    onToggled: {
-                                        draft.thinking = !draft.thinking
-                                        draft.capsTouched = true
-                                    }
-                                }
-                                Row {
-                                    visible: draft.thinking
-                                    spacing: 8
-                                    Repeater {
-                                        model: [
-                                            { value: "", label: "Off" },
-                                            { value: "low", label: "Low" },
-                                            { value: "medium", label: "Medium" },
-                                            { value: "high", label: "High" }
-                                        ]
-                                        Rectangle {
-                                            required property var modelData
-                                            width: modeLab.implicitWidth + 24
-                                            height: 32
-                                            radius: 16
-                                            color: draft.thinkDefault === modelData.value ? Theme.text : Theme.hover
-                                            Text {
-                                                id: modeLab
-                                                anchors.centerIn: parent
-                                                text: modelData.label
-                                                color: draft.thinkDefault === modelData.value ? Theme.bg : Theme.text
-                                                font.pixelSize: 13
-                                            }
-                                            MouseArea {
-                                                anchors.fill: parent
-                                                cursorShape: Qt.PointingHandCursor
-                                                onClicked: draft.thinkDefault = modelData.value
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        Rectangle { Layout.fillWidth: true; Layout.leftMargin: 24; Layout.rightMargin: 24; height: 1; color: Theme.hairline }
-
-                        Text {
                             text: "Backends"
                             color: Theme.text
                             font.pixelSize: 15
@@ -768,7 +497,7 @@ Popup {
                             Layout.leftMargin: 24
                         }
                         Text {
-                            text: "OpenAI-compatible endpoints. The selected backend supplies the model list."
+                            text: "OpenAI-compatible endpoints. Every enabled backend contributes its models to the picker as backend / model."
                             color: Theme.muted
                             font.pixelSize: 12
                             wrapMode: Text.Wrap
@@ -790,7 +519,8 @@ Popup {
                                 Layout.rightMargin: 24
                                 radius: 12
                                 color: Theme.panel
-                                border.color: draft.activeBackendId === backendId ? Theme.border : "transparent"
+                                border.color: Theme.border
+                                opacity: enToggle.checked ? 1.0 : 0.5
                                 implicitHeight: beCol.height + 20
                                 ColumnLayout {
                                     id: beCol
@@ -803,12 +533,13 @@ Popup {
                                         TextField {
                                             Layout.fillWidth: true
                                             text: name
-                                            onEditingFinished: draftBackends.setProperty(index, "name", text)
+                                            onTextEdited: draftBackends.setProperty(index, "name", text)
                                         }
-                                        RadioButton {
-                                            checked: draft.activeBackendId === backendId
-                                            onClicked: draft.activeBackendId = backendId
-                                            text: "Active"
+                                        Switch {
+                                            id: enToggle
+                                            checked: !!draftBackends.get(index).enabled
+                                            onToggled: draftBackends.setProperty(index, "enabled", checked)
+                                            text: "Enabled"
                                         }
                                         Text {
                                             text: "Remove"
@@ -817,11 +548,7 @@ Popup {
                                             MouseArea {
                                                 anchors.fill: parent
                                                 cursorShape: Qt.PointingHandCursor
-                                                onClicked: {
-                                                    if (draft.activeBackendId === backendId && index + 1 < draftBackends.count)
-                                                        draft.activeBackendId = draftBackends.get(index === 0 ? 1 : 0).backendId
-                                                    draftBackends.remove(index)
-                                                }
+                                                onClicked: draftBackends.remove(index)
                                             }
                                         }
                                     }
@@ -829,14 +556,14 @@ Popup {
                                         Layout.fillWidth: true
                                         text: baseUrl
                                         placeholderText: "http://127.0.0.1:11434/v1"
-                                        onEditingFinished: draftBackends.setProperty(index, "baseUrl", text)
+                                        onTextEdited: draftBackends.setProperty(index, "baseUrl", text)
                                     }
                                     TextField {
                                         Layout.fillWidth: true
                                         text: apiKey
                                         placeholderText: "API key (optional, default ollama)"
                                         echoMode: TextInput.Password
-                                        onEditingFinished: draftBackends.setProperty(index, "apiKey", text)
+                                        onTextEdited: draftBackends.setProperty(index, "apiKey", text)
                                     }
                                 }
                             }
@@ -845,17 +572,204 @@ Popup {
                             Layout.leftMargin: 24
                             text: "Add backend"
                             onClicked: {
-                                const id = settings.makeId()
                                 draftBackends.append({
-                                                         backendId: id,
+                                                         backendId: settings.makeId(),
                                                          name: "Custom",
                                                          baseUrl: "http://127.0.0.1:11434/v1",
-                                                         apiKey: ""
+                                                         apiKey: "",
+                                                         enabled: true
                                                      })
-                                if (!draft.activeBackendId.length)
-                                    draft.activeBackendId = id
                             }
                         }
+
+                        Rectangle { Layout.fillWidth: true; Layout.leftMargin: 24; Layout.rightMargin: 24; height: 1; color: Theme.hairline }
+
+                        Text {
+                            text: "Model capabilities"
+                            color: Theme.text
+                            font.pixelSize: 15
+                            font.weight: Font.DemiBold
+                            Layout.leftMargin: 24
+                            Layout.topMargin: 8
+                        }
+                        Text {
+                            text: "Auto-detected where the backend advertises them (Ollama). llama.cpp can't, so set those yourself. Changes apply immediately."
+                            color: Theme.muted
+                            font.pixelSize: 12
+                            wrapMode: Text.Wrap
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 24
+                            Layout.rightMargin: 24
+                        }
+                        Text {
+                            visible: settings.models.rowCount() === 0
+                            text: "No models yet — enable a reachable backend below and Save."
+                            color: Theme.muted
+                            font.pixelSize: 12
+                            Layout.leftMargin: 24
+                        }
+                        Repeater {
+                            model: settings.models
+                            Rectangle {
+                                required property int index
+                                required property string backendId
+                                required property string name
+                                required property string label
+                                required property bool capVision
+                                required property bool capTools
+                                required property bool capThinking
+                                required property bool capAudio
+                                required property bool capAdvertised
+                                required property bool capOverridden
+                                required property string contextLabel
+                                Layout.fillWidth: true
+                                Layout.leftMargin: 24
+                                Layout.rightMargin: 24
+                                radius: 12
+                                color: Theme.panel
+                                implicitHeight: capCol.height + 20
+                                ColumnLayout {
+                                    id: capCol
+                                    x: 12
+                                    y: 10
+                                    width: parent.width - 24
+                                    spacing: 8
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: label
+                                            color: Theme.text
+                                            font.pixelSize: 13
+                                            font.weight: Font.DemiBold
+                                            elide: Text.ElideRight
+                                        }
+                                        Text {
+                                            text: "ctx"
+                                            color: Theme.muted
+                                            font.pixelSize: 11
+                                        }
+                                        ContextCombo {
+                                            value: contextLabel
+                                            onCommitted: function(text) {
+                                                settings.setModelContextFromText(backendId, name, text)
+                                            }
+                                        }
+                                        Text {
+                                            text: capOverridden ? "custom" : (capAdvertised ? "auto" : "guessed")
+                                            color: Theme.muted
+                                            font.pixelSize: 11
+                                        }
+                                        Text {
+                                            visible: capOverridden
+                                            text: "Reset"
+                                            color: Theme.text
+                                            font.pixelSize: 11
+                                            leftPadding: 6
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                anchors.margins: -6
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: settings.resetModelCapsFor(backendId, name)
+                                            }
+                                        }
+                                    }
+                                    Flow {
+                                        Layout.fillWidth: true
+                                        spacing: 8
+                                        Repeater {
+                                            model: [
+                                                { feat: "vision", label: "Vision", on: capVision },
+                                                { feat: "tools", label: "Tools", on: capTools },
+                                                { feat: "thinking", label: "Thinking", on: capThinking },
+                                                { feat: "audio", label: "Audio", on: capAudio }
+                                            ]
+                                            Rectangle {
+                                                required property var modelData
+                                                width: chipLab.implicitWidth + 26
+                                                height: 30
+                                                radius: 15
+                                                color: modelData.on ? Theme.text : Theme.hover
+                                                Text {
+                                                    id: chipLab
+                                                    anchors.centerIn: parent
+                                                    text: modelData.label
+                                                    color: modelData.on ? Theme.bg : Theme.text
+                                                    font.pixelSize: 12
+                                                }
+                                                MouseArea {
+                                                    anchors.fill: parent
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: settings.setModelCap(backendId, name, modelData.feat, !modelData.on)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: "Default thinking mode"
+                            color: Theme.text
+                            font.pixelSize: 15
+                            font.weight: Font.DemiBold
+                            Layout.leftMargin: 24
+                            Layout.topMargin: 8
+                        }
+                        Text {
+                            text: "Applies to new chats when the selected model has Thinking; change it per message anytime."
+                            color: Theme.muted
+                            font.pixelSize: 12
+                            wrapMode: Text.Wrap
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 24
+                            Layout.rightMargin: 24
+                        }
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 24
+                            Layout.rightMargin: 24
+                            radius: 12
+                            color: Theme.panel
+                            implicitHeight: thinkModeRow.height + 24
+                            enabled: settings.anyModelThinking
+                            opacity: enabled ? 1 : 0.5
+                            Row {
+                                id: thinkModeRow
+                                x: 16
+                                y: 12
+                                spacing: 8
+                                Repeater {
+                                    model: [
+                                        { value: "", label: "Off" },
+                                        { value: "low", label: "Low" },
+                                        { value: "medium", label: "Medium" },
+                                        { value: "high", label: "High" }
+                                    ]
+                                    Rectangle {
+                                        required property var modelData
+                                        width: modeLab.implicitWidth + 24
+                                        height: 32
+                                        radius: 16
+                                        color: draft.thinkDefault === modelData.value ? Theme.text : Theme.hover
+                                        Text {
+                                            id: modeLab
+                                            anchors.centerIn: parent
+                                            text: modelData.label
+                                            color: draft.thinkDefault === modelData.value ? Theme.bg : Theme.text
+                                            font.pixelSize: 13
+                                        }
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: draft.thinkDefault = modelData.value
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         Item { Layout.preferredHeight: 20 }
                     }
                 }
@@ -1369,7 +1283,15 @@ Popup {
                     MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: saveDraft()
+                        onClicked: {
+                            // This Save button is a MouseArea and doesn't take
+                            // keyboard focus, so a field still being edited would
+                            // never fire editingFinished and its edit (e.g. a
+                            // changed backend URL) would be dropped. Steal focus
+                            // first to commit it, then save.
+                            parent.forceActiveFocus()
+                            saveDraft()
+                        }
                     }
                 }
             }

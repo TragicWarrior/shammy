@@ -67,6 +67,7 @@ struct Backend
     QString baseUrl;
     QString apiKey;
     QString extraHeadersJson;
+    bool enabled = true;
     qint64 createdAt = 0;
 };
 

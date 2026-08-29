@@ -173,12 +173,12 @@ void OpenAiClient::applyAuth(QNetworkRequest *req, const QString &apiKey, const 
     }
 }
 
-void OpenAiClient::listModels(const QString &baseUrl, const QString &apiKey)
+void OpenAiClient::listModels(const QString &baseUrl, const QString &apiKey, const QString &backendId)
 {
     QNetworkRequest req(modelsUrl(baseUrl));
     applyAuth(&req, apiKey, {});
     QNetworkReply *reply = m_nam.get(req);
-    connect(reply, &QNetworkReply::finished, this, [this, reply]()
+    connect(reply, &QNetworkReply::finished, this, [this, reply, backendId]()
     {
         reply->deleteLater();
         QString err;
@@ -204,7 +204,7 @@ void OpenAiClient::listModels(const QString &baseUrl, const QString &apiKey)
         {
             err = QStringLiteral("unexpected models response");
         }
-        emit modelsListed(ids, err);
+        emit modelsListed(backendId, ids, err);
     });
 }
 
