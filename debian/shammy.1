@@ -1,0 +1,25 @@
+.TH SHAMMY 1 "September 2026" "shammy 0.9.6" "User Commands"
+.SH NAME
+shammy \- desktop chat client for OpenAI-compatible local backends
+.SH SYNOPSIS
+.B shammy
+.SH DESCRIPTION
+Shammy is a Qt 6 desktop chat client for Ollama, llama.cpp server,
+LM Studio, vLLM, and other OpenAI-compatible /v1 backends. It streams
+completions, keeps conversation history, runs local MCP tools, and
+previews HTML and SVG artifacts.
+.SH FILES
+.TP
+.I ~/.local/share/shammy/
+Conversation database and application data.
+.TP
+.I ~/.config/shammy/shammy.conf
+Qt settings.
+.TP
+.I ~/.shammy/config.json
+MCP server configuration (Claude Desktop
+.B mcpServers
+schema).
+.SH SEE ALSO
+.UR https://github.com/TragicWarrior/shammy
+.UE

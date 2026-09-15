@@ -1,0 +1,5 @@
+shammy (0.9.6-1) unstable; urgency=medium
+
+  * Initial Debian package.
+
+ -- Bryan Christ <bryan.christ@gmail.com>  Sat, 05 Sep 2026 23:55:51 -0500
