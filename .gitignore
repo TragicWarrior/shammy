@@ -18,3 +18,11 @@ qrc_*.cpp
 compile_commands.json
 .idea/
 .vscode/
+/obj-*/
+/debian/.debhelper/
+/debian/files
+/debian/debhelper-build-stamp
+/debian/*.substvars
+/debian/*.debhelper
+/debian/*.debhelper.log
+/debian/shammy/

@@ -1,0 +1,38 @@
+Source: shammy
+Section: net
+Priority: optional
+Maintainer: Bryan Christ <bryan.christ@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+ cmake,
+ pkg-config,
+ qt6-base-dev,
+ qt6-declarative-dev,
+ qt6-svg-dev,
+ qt6-tools-dev,
+ qt6-webengine-dev,
+ libssl-dev
+Standards-Version: 4.6.2
+Homepage: https://github.com/TragicWarrior/shammy
+Vcs-Git: https://github.com/TragicWarrior/shammy.git
+Vcs-Browser: https://github.com/TragicWarrior/shammy
+
+Package: shammy
+Architecture: any
+Depends: ${shlibs:Depends},
+ ${misc:Depends},
+ libqt6sql6-sqlite,
+ qml6-module-qtquick,
+ qml6-module-qtquick-controls,
+ qml6-module-qtquick-layouts,
+ qml6-module-qtquick-dialogs,
+ qml6-module-qtquick-templates,
+ qml6-module-qtquick-window,
+ qml6-module-qtqml,
+ qml6-module-qtqml-models,
+ qml6-module-qtwebengine
+Recommends: libreoffice-core
+Description: desktop chat client for OpenAI-compatible local backends
+ Shammy is a Qt 6 desktop chat client for Ollama, llama.cpp server,
+ LM Studio, vLLM, and other OpenAI-compatible /v1 backends. It
+ streams completions, manages conversations and projects, runs local
+ MCP tools, and previews HTML and SVG artifacts.

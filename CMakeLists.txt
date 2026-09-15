@@ -186,12 +186,11 @@ install(FILES packaging/linux/shammy.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(FILES resources/shammy.svg
         DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
-install(FILES resources/icons/shammy-48.png
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/48x48/apps
-        RENAME shammy.png)
-install(FILES resources/icons/shammy-128.png
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/128x128/apps
-        RENAME shammy.png)
+foreach(sz 16 22 24 32 48 64 128 256)
+    install(FILES resources/icons/shammy-${sz}.png
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/${sz}x${sz}/apps
+            RENAME shammy.png)
+endforeach()
 
 if(TARGET Qt6::Test)
     enable_testing()
