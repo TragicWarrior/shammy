@@ -6,6 +6,7 @@
 #include <QByteArray>
 #include <QObject>
 #include <QNetworkAccessManager>
+#include <QTimer>
 
 class QNetworkReply;
 
@@ -47,6 +48,10 @@ private:
     void applyAuth(QNetworkRequest *req, const QString &apiKey, const QString &extraHeadersJson) const;
     void onStreamReadyRead();
     void onStreamFinished();
+    void onStreamIdle();
+    void dispatchEvents(const QVector<SseParser::Event> &events);
+    void finishStream(const QString &reason);
+    void armIdleTimer();
     void clearReply();
     void abortInternal(bool notify);
 
@@ -58,9 +63,10 @@ private:
     QNetworkReply *m_reply = nullptr;
     QNetworkReply *m_completeReply = nullptr;
     SseParser m_parser;
+    QTimer m_idleTimer;
     bool m_gotDone = false;
     bool m_aborted = false;
     bool m_failed = false;
+    bool m_gotEvent = false;
     QString m_finishReason;
-    QByteArray m_streamBuf;
 };

@@ -241,7 +241,20 @@ bool Store::migrate()
         upsertBackend(llama);
         setSetting(QStringLiteral("current_backend"), ollama.id);
     }
+
+    deleteNullIdConversations();
     return true;
+}
+
+void Store::deleteNullIdConversations()
+{
+    exec(QStringLiteral("DELETE FROM messages WHERE conversation_id IS NULL OR conversation_id = ''"));
+    exec(QStringLiteral("DELETE FROM artifacts WHERE conversation_id IS NULL OR conversation_id = ''"));
+    if (m_fts)
+    {
+        exec(QStringLiteral("DELETE FROM search_idx WHERE conversation_id IS NULL OR conversation_id = ''"));
+    }
+    exec(QStringLiteral("DELETE FROM conversations WHERE id IS NULL OR id = ''"));
 }
 
 QString Store::setting(const QString &key, const QString &def) const
@@ -453,7 +466,14 @@ QList<Conversation> Store::conversations(const QString &projectId) const
         q.exec();
     }
     while (q.next())
-        out.append(convFromQuery(q));
+    {
+        Conversation c = convFromQuery(q);
+        if (c.id.isEmpty())
+        {
+            continue;
+        }
+        out.append(c);
+    }
     return out;
 }
 
@@ -469,6 +489,10 @@ Conversation Store::conversation(const QString &id) const
 
 void Store::upsertConversation(const Conversation &c)
 {
+    if (c.id.isEmpty())
+    {
+        return;
+    }
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral(
         "INSERT INTO conversations(id,project_id,title,backend_id,model,reasoning_effort,pinned,created_at,updated_at) "
@@ -492,6 +516,12 @@ void Store::upsertConversation(const Conversation &c)
 
 void Store::deleteConversation(const QString &id)
 {
+    if (id.isEmpty())
+    {
+        deleteNullIdConversations();
+        emit conversationsChanged();
+        return;
+    }
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral("DELETE FROM messages WHERE conversation_id = ?"));
     q.addBindValue(id);
@@ -523,7 +553,9 @@ QList<Conversation> Store::search(const QString &query) const
         {
             const Conversation c = convFromQuery(q);
             if (c.id.isEmpty() || seen.contains(c.id))
+            {
                 continue;
+            }
             seen.insert(c.id);
             out.append(c);
         }

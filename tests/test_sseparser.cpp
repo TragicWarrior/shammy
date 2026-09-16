@@ -83,6 +83,47 @@ private slots:
         QCOMPARE(e.size(), 1);
         QCOMPARE(e[0].contentDelta, QString("z"));
     }
+
+    void contentAsArrayOfParts()
+    {
+        SseParser p;
+        auto e = p.feed(
+            "data: {\"choices\":[{\"delta\":{\"content\":"
+            "[{\"type\":\"text\",\"text\":\"Hel\"},{\"text\":\"lo\"}]}}]}\n");
+        QCOMPARE(e.size(), 1);
+        QCOMPARE(e[0].contentDelta, QString("Hello"));
+    }
+
+    void reasoningObjectAndNullContent()
+    {
+        SseParser p;
+        auto e = p.feed(
+            "data: {\"choices\":[{\"delta\":{\"content\":null,"
+            "\"reasoning\":{\"content\":\"hmm\"}}}]}\n");
+        QCOMPARE(e.size(), 1);
+        QCOMPARE(e[0].reasoningDelta, QString("hmm"));
+        QVERIFY(e[0].contentDelta.isEmpty());
+    }
+
+    void typedReasoningDelta()
+    {
+        SseParser p;
+        auto e = p.feed(
+            "data: {\"choices\":[{\"delta\":{\"type\":\"reasoning\",\"text\":\"think\"}}]}\n");
+        QCOMPARE(e.size(), 1);
+        QCOMPARE(e[0].reasoningDelta, QString("think"));
+        QVERIFY(e[0].contentDelta.isEmpty());
+    }
+
+    void flushTrailingLineWithoutNewline()
+    {
+        SseParser p;
+        auto e1 = p.feed("data: {\"choices\":[{\"delta\":{\"content\":\"cut\"}}]}");
+        QVERIFY(e1.isEmpty());
+        auto e2 = p.flush();
+        QCOMPARE(e2.size(), 1);
+        QCOMPARE(e2[0].contentDelta, QString("cut"));
+    }
 };
 
 QTEST_MAIN(TestSseParser)

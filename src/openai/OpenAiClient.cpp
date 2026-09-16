@@ -8,10 +8,13 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QUrl>
+#include <QVector>
 
 OpenAiClient::OpenAiClient(QObject *parent)
     : QObject(parent)
 {
+    m_idleTimer.setSingleShot(true);
+    connect(&m_idleTimer, &QTimer::timeout, this, &OpenAiClient::onStreamIdle);
 }
 
 QString OpenAiClient::normalizeBaseUrl(QString url)
@@ -350,6 +353,7 @@ void OpenAiClient::onCompleteFinished()
 
 void OpenAiClient::abortInternal(bool notify)
 {
+    m_idleTimer.stop();
     if (!m_reply)
         return;
     m_aborted = true;
@@ -363,6 +367,7 @@ void OpenAiClient::abortInternal(bool notify)
 
 void OpenAiClient::clearReply()
 {
+    m_idleTimer.stop();
     if (!m_reply)
         return;
     m_reply->disconnect(this);
@@ -393,6 +398,68 @@ QString OpenAiClient::httpErrorMessage(QNetworkReply *reply, const QByteArray &b
     return api;
 }
 
+void OpenAiClient::armIdleTimer()
+{
+    // Only after the first parsed token. SSE keep-alives do not count.
+    m_idleTimer.start(60000);
+}
+
+void OpenAiClient::dispatchEvents(const QVector<SseParser::Event> &events)
+{
+    if (events.isEmpty())
+    {
+        return;
+    }
+    m_gotEvent = true;
+    armIdleTimer();
+    for (const SseParser::Event &ev : events)
+    {
+        if (!ev.error.isEmpty())
+        {
+            if (!m_failed)
+            {
+                m_failed = true;
+                emit failed(ev.error);
+            }
+            return;
+        }
+        if (!ev.contentDelta.isEmpty())
+        {
+            emit chunk(ev.contentDelta);
+        }
+        if (!ev.reasoningDelta.isEmpty())
+        {
+            emit reasoning(ev.reasoningDelta);
+        }
+        for (const auto &tc : ev.toolCalls)
+        {
+            emit toolCallDelta(tc.index, tc.id, tc.name, tc.argumentsDelta);
+        }
+        if (!ev.finishReason.isEmpty())
+        {
+            m_finishReason = ev.finishReason;
+        }
+        if (ev.hasUsage)
+        {
+            emit usage(ev.promptTokens, ev.completionTokens, ev.totalTokens);
+        }
+        if (ev.done)
+        {
+            m_gotDone = true;
+        }
+    }
+}
+
+void OpenAiClient::finishStream(const QString &reason)
+{
+    clearReply();
+    if (m_failed)
+    {
+        return;
+    }
+    emit finished(reason);
+}
+
 void OpenAiClient::streamChat(const ChatRequest &req)
 {
     abortInternal(false);
@@ -400,8 +467,8 @@ void OpenAiClient::streamChat(const ChatRequest &req)
     m_gotDone = false;
     m_aborted = false;
     m_failed = false;
+    m_gotEvent = false;
     m_finishReason.clear();
-    m_streamBuf.clear();
 
     QNetworkRequest nreq(chatCompletionsUrl(req.baseUrl));
     applyAuth(&nreq, req.apiKey, {});
@@ -415,85 +482,68 @@ void OpenAiClient::streamChat(const ChatRequest &req)
 void OpenAiClient::onStreamReadyRead()
 {
     if (!m_reply || m_aborted)
-        return;
-    const auto events = m_parser.feed(m_reply->readAll());
-    for (const SseParser::Event &ev : events)
     {
-        if (!ev.error.isEmpty())
-        {
-            if (!m_failed)
-            {
-                m_failed = true;
-                emit failed(ev.error);
-            }
-            return;
-        }
-        if (!ev.contentDelta.isEmpty())
-            emit chunk(ev.contentDelta);
-        if (!ev.reasoningDelta.isEmpty())
-            emit reasoning(ev.reasoningDelta);
-        for (const auto &tc : ev.toolCalls)
-            emit toolCallDelta(tc.index, tc.id, tc.name, tc.argumentsDelta);
-        if (!ev.finishReason.isEmpty())
-            m_finishReason = ev.finishReason;
-        if (ev.hasUsage)
-            emit usage(ev.promptTokens, ev.completionTokens, ev.totalTokens);
-        if (ev.done)
-            m_gotDone = true;
+        return;
     }
+    dispatchEvents(m_parser.feed(m_reply->readAll()));
+}
+
+void OpenAiClient::onStreamIdle()
+{
+    if (!m_reply || m_aborted || m_failed || !m_gotEvent)
+    {
+        return;
+    }
+    dispatchEvents(m_parser.flush());
+    if (m_failed)
+    {
+        clearReply();
+        return;
+    }
+    const QString reason = m_finishReason.isEmpty() ? QStringLiteral("stop") : m_finishReason;
+    abortInternal(false);
+    emit finished(reason);
 }
 
 void OpenAiClient::onStreamFinished()
 {
     if (!m_reply || m_aborted)
+    {
         return;
+    }
     const QByteArray rest = m_reply->readAll();
     if (!rest.isEmpty())
     {
-        const auto events = m_parser.feed(rest + '\n');
-        for (const SseParser::Event &ev : events)
-        {
-            if (!ev.error.isEmpty())
-            {
-                const QString e = ev.error;
-                clearReply();
-                if (!m_failed)
-                {
-                    m_failed = true;
-                    emit failed(e);
-                }
-                return;
-            }
-            if (!ev.contentDelta.isEmpty())
-                emit chunk(ev.contentDelta);
-            if (!ev.reasoningDelta.isEmpty())
-                emit reasoning(ev.reasoningDelta);
-            for (const auto &tc : ev.toolCalls)
-                emit toolCallDelta(tc.index, tc.id, tc.name, tc.argumentsDelta);
-            if (!ev.finishReason.isEmpty())
-                m_finishReason = ev.finishReason;
-            if (ev.hasUsage)
-                emit usage(ev.promptTokens, ev.completionTokens, ev.totalTokens);
-            if (ev.done)
-                m_gotDone = true;
-        }
+        dispatchEvents(m_parser.feed(rest + '\n'));
+    }
+    else
+    {
+        dispatchEvents(m_parser.flush());
     }
 
     QNetworkReply::NetworkError nerr = m_reply->error();
     const int status = m_reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const QByteArray errBody = rest;
     const QString httpErr = httpErrorMessage(m_reply, errBody, status);
-    clearReply();
 
     if (m_failed)
+    {
+        clearReply();
         return;
+    }
     if (nerr == QNetworkReply::OperationCanceledError)
-        emit finished(QStringLiteral("aborted"));
-    else if (nerr != QNetworkReply::NoError && !m_gotDone)
+    {
+        finishStream(QStringLiteral("aborted"));
+        return;
+    }
+    // A stall/timeout after we already have tokens is a truncated reply, not a
+    // hard failure — keep the partial assistant message.
+    if (nerr != QNetworkReply::NoError && !m_gotDone && !m_gotEvent)
     {
         m_failed = true;
+        clearReply();
         emit failed(httpErr);
+        return;
     }
-    else
-        emit finished(m_finishReason.isEmpty() ? QStringLiteral("stop") : m_finishReason);
+    finishStream(m_finishReason.isEmpty() ? QStringLiteral("stop") : m_finishReason);
 }

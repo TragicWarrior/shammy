@@ -31,7 +31,7 @@ Item {
             return "Searching web…"
         if (root.waitingOnTools)
             return "Using tools…"
-        if (root.writingHeavy || root.writingHtml)
+        if (root.writingHtml)
             return "Writing artifact…"
         if (root.streaming && (root.reasoning.length > 0 && root.content.length < 24))
             return "Reasoning…"
@@ -49,42 +49,26 @@ Item {
     readonly property bool thinkVisible: !isUser && !isTool && !isCompact && reasoning.length > 0
     readonly property bool showThinkBody: thinkVisible && (settings.showReasoning || thinkRevealed)
     readonly property bool showToolBody: isTool && content.length > 0 && (settings.showToolInsights || toolRevealed)
-    readonly property bool writingHtml: {
-        if (!streaming || isUser || isTool || isCompact)
-            return false
-        const head = content.substring(0, 1600).toLowerCase()
-        return head.indexOf("<artifact") !== -1
-            || head.indexOf("<!doctype") !== -1
-            || head.indexOf("<html") !== -1
+    function looksLikeHtml(s) {
+        const body = String(s || "").toLowerCase()
+        return body.indexOf("<artifact") !== -1
+            || body.indexOf("<!doctype") !== -1
+            || body.indexOf("<html") !== -1
+            || body.indexOf("<svg") !== -1
     }
-    readonly property bool writingHeavy: {
-        if (!streaming || isUser || isTool || isCompact)
-            return false
-        return writingHtml || content.length > 2500
-    }
+    readonly property bool writingHtml: streaming && !isUser && !isTool && !isCompact
+        && looksLikeHtml(content)
     width: parent ? parent.width : 600
     height: bubble.height
 
     function isHeavyMarkup(s, type, language) {
         const lang = String(language || "").toLowerCase()
-        if (lang === "md" || lang === "markdown")
+        if (lang === "html" || lang === "htm" || lang === "svg"
+                || lang === "javascript" || lang === "js")
             return true
-        if (type === "artifact")
+        if (type === "artifact" || lang === "md" || lang === "markdown")
             return false
-        if (!s || s.length < 1)
-            return false
-        if (s.length > 2500)
-            return true
-        const head = s.substring(0, 800).toLowerCase()
-        if (head.indexOf("<!doctype") !== -1
-                || head.indexOf("<html") !== -1
-                || head.indexOf("<artifact") !== -1)
-            return true
-        if (s.length > 1200 && (head.indexOf("```") !== -1
-                || head.indexOf("# ") === 0
-                || head.indexOf("\n# ") !== -1))
-            return true
-        return false
+        return looksLikeHtml(s)
     }
 
     // Artifacts for this message (store-backed, or in-memory for private chats).
@@ -246,7 +230,7 @@ Item {
             }
 
             Text {
-                visible: root.streaming && root.content.length > 0 && !root.isTool && !root.writingHeavy
+                visible: root.streaming && root.content.length > 0 && !root.isTool && !root.writingHtml
                 width: parent.width
                 text: root.content
                 color: Theme.text

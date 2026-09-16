@@ -23,6 +23,10 @@ public:
     static bool urlAllowed(const QUrl &url);
     static QUrl canonicalizeFetchUrl(const QUrl &url);
     static QString extractText(const QByteArray &body, const QString &contentType);
+    static bool isStaticAssetUrl(const QUrl &url);
+    static QString staticAssetHint(const QUrl &url);
+    // Shrink a stored tool payload before it is sent back to the model.
+    static QString clipForModel(const QString &content);
 
     void search(const QString &provider, const QString &apiKey, const QString &query,
                 const std::function<void(QString text, QString error)> &cb);

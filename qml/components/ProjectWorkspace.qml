@@ -454,7 +454,8 @@ Item {
                 // Trailing spinner keeps the title's left edge flush.
                 Text {
                     id: recSpinner
-                    visible: chat.generatingConversationId === conversationId
+                    visible: chat.generatingConversationId.length > 0
+                             && chat.generatingConversationId === conversationId
                     Layout.preferredWidth: visible ? 14 : 0
                     horizontalAlignment: Text.AlignHCenter
                     text: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][spin]

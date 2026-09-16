@@ -75,6 +75,29 @@ private slots:
         QVERIFY(d.isEmpty());
     }
 
+    void unfencedHtmlDocument()
+    {
+        QString html = QStringLiteral("<!DOCTYPE html>\n<html><body>");
+        for (int i = 0; i < 40; ++i)
+        {
+            html += QStringLiteral("<p>row %1</p>").arg(i);
+        }
+        html += QStringLiteral("</body></html>");
+        const QString s = QStringLiteral("Here is the report:\n\n") + html;
+        const auto d = ArtifactExtractor::extract(s);
+        QCOMPARE(d.size(), 1);
+        QCOMPARE(d[0].type, QString("text/html"));
+        QVERIFY(d[0].content.startsWith(QLatin1String("<!DOCTYPE html>")));
+        QVERIFY(!d[0].content.startsWith(QLatin1String("Here is")));
+    }
+
+    void shortHtmlMentionIgnored()
+    {
+        const auto d = ArtifactExtractor::extract(
+            QStringLiteral("Use an <html> tag if you need one."));
+        QVERIFY(d.isEmpty());
+    }
+
     void splitsMarkdownTable()
     {
         const QString s = QStringLiteral(

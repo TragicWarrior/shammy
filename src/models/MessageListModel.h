@@ -34,6 +34,8 @@ public:
     void finishLast();
     void setLastError(const QString &err);
     void setLastToolCalls(const QString &json);
+    void setLastContent(const QString &text);
+    void removeLast();
     const ChatMessage &last() const;
     const QVector<ChatMessage> &all() const { return m_items; }
     void clear();

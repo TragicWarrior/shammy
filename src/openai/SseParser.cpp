@@ -3,10 +3,49 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
 
 void SseParser::reset()
 {
     m_buf.clear();
+}
+
+static QString jsonToText(const QJsonValue &v)
+{
+    if (v.isNull() || v.isUndefined() || v.isBool() || v.isDouble())
+    {
+        return {};
+    }
+    if (v.isString())
+    {
+        return v.toString();
+    }
+    if (v.isArray())
+    {
+        QString acc;
+        const QJsonArray arr = v.toArray();
+        for (const QJsonValue &item : arr)
+        {
+            acc += jsonToText(item);
+        }
+        return acc;
+    }
+    if (v.isObject())
+    {
+        const QJsonObject o = v.toObject();
+        const QString text = jsonToText(o.value(QStringLiteral("text")));
+        if (!text.isEmpty())
+        {
+            return text;
+        }
+        const QString content = jsonToText(o.value(QStringLiteral("content")));
+        if (!content.isEmpty())
+        {
+            return content;
+        }
+        return o.value(QStringLiteral("thinking")).toString();
+    }
+    return {};
 }
 
 static QByteArray stripPrefix(QByteArray line)
@@ -86,20 +125,33 @@ SseParser::Event SseParser::parsePayload(QByteArray payload) const
     if (delta.isEmpty())
         delta = choice.value(QStringLiteral("message")).toObject();
 
-    ev.contentDelta = delta.value(QStringLiteral("content")).toString();
+    ev.contentDelta = jsonToText(delta.value(QStringLiteral("content")));
     if (ev.contentDelta.isEmpty())
-        ev.contentDelta = delta.value(QStringLiteral("text")).toString();
+    {
+        ev.contentDelta = jsonToText(delta.value(QStringLiteral("text")));
+    }
 
     QJsonValue reasoning = delta.value(QStringLiteral("reasoning_content"));
     if (reasoning.isNull() || reasoning.isUndefined())
+    {
         reasoning = delta.value(QStringLiteral("reasoning"));
-    if (reasoning.isString())
-        ev.reasoningDelta = reasoning.toString();
-    else if (reasoning.isObject())
-        ev.reasoningDelta = reasoning.toObject().value(QStringLiteral("content")).toString();
-
+    }
+    ev.reasoningDelta = jsonToText(reasoning);
     if (ev.reasoningDelta.isEmpty())
-        ev.reasoningDelta = delta.value(QStringLiteral("thinking")).toString();
+    {
+        ev.reasoningDelta = jsonToText(delta.value(QStringLiteral("thinking")));
+    }
+
+    // Some thinking models tag the delta instead of using reasoning_content.
+    if (ev.reasoningDelta.isEmpty())
+    {
+        const QString kind = delta.value(QStringLiteral("type")).toString();
+        if (kind == QLatin1String("reasoning") || kind == QLatin1String("thinking"))
+        {
+            ev.reasoningDelta = ev.contentDelta;
+            ev.contentDelta.clear();
+        }
+    }
 
     const QJsonArray toolCalls = delta.value(QStringLiteral("tool_calls")).toArray();
     for (const auto &v : toolCalls)
@@ -150,4 +202,18 @@ QVector<SseParser::Event> SseParser::feed(const QByteArray &data)
             out.push_back(ev);
     }
     return out;
+}
+
+QVector<SseParser::Event> SseParser::flush()
+{
+    if (m_buf.trimmed().isEmpty())
+    {
+        m_buf.clear();
+        return {};
+    }
+    if (!m_buf.endsWith('\n'))
+    {
+        m_buf += '\n';
+    }
+    return feed({});
 }

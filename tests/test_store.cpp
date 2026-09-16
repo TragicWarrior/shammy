@@ -1,6 +1,8 @@
 #include "persist/Store.h"
 #include "Util.h"
 
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -167,6 +169,65 @@ private slots:
         QCOMPARE(store.messages(c.id).size(), 2);
         const auto found = store.search(QStringLiteral("row"));
         QVERIFY(found.size() >= 1);
+    }
+
+    void refusesEmptyConversationId()
+    {
+        QTemporaryDir dir;
+        Store store;
+        QVERIFY(store.open(dir.path() + "/empty-id.db"));
+        const int before = store.conversations().size();
+        Conversation c;
+        c.title = QStringLiteral("New chat");
+        c.model = QStringLiteral("qwen3.6:35b-a3b");
+        c.createdAt = c.updatedAt = nowMs();
+        store.upsertConversation(c);
+        QCOMPARE(store.conversations().size(), before);
+    }
+
+    void deleteNullIdConversation()
+    {
+        QTemporaryDir dir;
+        const QString path = dir.path() + "/null-id.db";
+        Store store;
+        QVERIFY(store.open(path));
+        Conversation keep;
+        keep.id = newId();
+        keep.title = QStringLiteral("keep me");
+        keep.createdAt = keep.updatedAt = nowMs();
+        store.upsertConversation(keep);
+
+        const QString conn = QStringLiteral("test-null-id");
+        {
+            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+            db.setDatabaseName(path);
+            QVERIFY(db.open());
+            QSqlQuery q(db);
+            QVERIFY(q.exec(QStringLiteral(
+                "INSERT INTO conversations(id,title,model,pinned,created_at,updated_at) "
+                "VALUES(NULL,'New chat','qwen',0,1,1)")));
+            db.close();
+        }
+        QSqlDatabase::removeDatabase(conn);
+
+        store.deleteConversation(QString());
+        const auto all = store.conversations();
+        QCOMPARE(all.size(), 1);
+        QCOMPARE(all.first().id, keep.id);
+        QVERIFY(!all.first().id.isEmpty());
+
+        {
+            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+            db.setDatabaseName(path);
+            QVERIFY(db.open());
+            QSqlQuery q(db);
+            QVERIFY(q.exec(QStringLiteral(
+                "SELECT COUNT(*) FROM conversations WHERE id IS NULL OR id = ''")));
+            QVERIFY(q.next());
+            QCOMPARE(q.value(0).toInt(), 0);
+            db.close();
+        }
+        QSqlDatabase::removeDatabase(conn);
     }
 };
 

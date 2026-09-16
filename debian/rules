@@ -3,9 +3,11 @@
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 export QT_QPA_PLATFORM = offscreen
 
-# The source tree has a CMake "build/" directory; without this, `debian/rules
-# build` is treated as already satisfied and skipped.
-.PHONY: build binary binary-arch binary-indep clean
+# ./build is the in-tree CMake directory. .PHONY + an explicit recipe (not the
+# `%:` pattern) is required so `debian/rules build` still runs.
+.PHONY: build
+build:
+	dh $@ --buildsystem=cmake
 
 %:
 	dh $@ --buildsystem=cmake

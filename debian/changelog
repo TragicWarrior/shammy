@@ -1,5 +1,16 @@
+shammy (0.9.7-1) unstable; urgency=medium
+
+  * Finish hung streams after reasoning instead of spinning forever.
+  * Keep ordinary markdown in the chat bubble; still promote HTML/SVG.
+  * Stop web_fetch from inlining JS/CSS libraries and looping Chart.js.
+  * Strip leaked <tool_call> XML from assistant bubbles.
+  * Fix undeletable NULL-id "New chat" rows.
+
+ -- Bryan Christ <bryan.christ@gmail.com>  Tue, 15 Sep 2026 10:43:38 -0500
+
 shammy (0.9.6-1) unstable; urgency=medium
 
   * Initial Debian package.
 
  -- Bryan Christ <bryan.christ@gmail.com>  Sat, 05 Sep 2026 23:55:51 -0500
+

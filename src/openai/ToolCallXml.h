@@ -78,4 +78,14 @@ inline QJsonArray parse(const QString &content)
     return out;
 }
 
+inline QString strip(QString content)
+{
+    static const QRegularExpression re(
+        QStringLiteral("<tool_call\\b[\\s\\S]*?</tool_call\\s*>"
+                       "|<tool_call\\b[\\s\\S]*\\z"),
+        QRegularExpression::CaseInsensitiveOption);
+    content.replace(re, QString());
+    return content.trimmed();
+}
+
 } // namespace ToolCallXml

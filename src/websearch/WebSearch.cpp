@@ -84,7 +84,9 @@ QJsonObject WebSearch::fetchToolDefinition()
     fn.insert(QStringLiteral("description"),
               QStringLiteral("Fetch a URL and return its text. Use when the user gives a link, or when you "
                              "need the contents of a specific page (GitHub README, docs, article). Do not "
-                             "claim you cannot browse. For open-ended questions without a URL, use web_search."));
+                             "fetch JavaScript/CSS libraries or CDN bundles — link them with <script src> or "
+                             "<link>. Do not claim you cannot browse. For open-ended questions without a URL, "
+                             "use web_search."));
     fn.insert(QStringLiteral("parameters"), params);
     return QJsonObject{{QStringLiteral("type"), QStringLiteral("function")},
                        {QStringLiteral("function"), fn}};
@@ -210,6 +212,94 @@ QUrl WebSearch::canonicalizeFetchUrl(const QUrl &url)
     return raw;
 }
 
+namespace {
+
+constexpr int kMaxFetchChars = 24000;
+
+bool isStaticAssetContentType(const QString &contentType)
+{
+    QString ct = contentType;
+    const int semi = ct.indexOf(QLatin1Char(';'));
+    if (semi >= 0)
+    {
+        ct = ct.left(semi);
+    }
+    ct = ct.trimmed().toLower();
+    return ct.contains(QLatin1String("javascript")) || ct.contains(QLatin1String("ecmascript"))
+        || ct == QLatin1String("text/css") || ct.contains(QLatin1String("wasm"))
+        || ct.startsWith(QLatin1String("font/"));
+}
+
+} // namespace
+
+bool WebSearch::isStaticAssetUrl(const QUrl &url)
+{
+    const QString path = url.path().toLower();
+    static const QStringList ext{
+        QStringLiteral(".js"),   QStringLiteral(".mjs"),  QStringLiteral(".cjs"),
+        QStringLiteral(".css"),  QStringLiteral(".map"),  QStringLiteral(".wasm"),
+        QStringLiteral(".woff"), QStringLiteral(".woff2"), QStringLiteral(".ttf"),
+        QStringLiteral(".eot"),  QStringLiteral(".otf"),
+    };
+    for (const QString &e : ext)
+    {
+        if (path.endsWith(e))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+QString WebSearch::staticAssetHint(const QUrl &url)
+{
+    const QString href = url.toString();
+    const QString path = url.path().toLower();
+    if (path.endsWith(QLatin1String(".css")))
+    {
+        return QStringLiteral(
+                   "URL: %1\n\nThis is a CSS stylesheet, not a document. Do not inline it. "
+                   "In HTML use:\n<link rel=\"stylesheet\" href=\"%1\">")
+            .arg(href);
+    }
+    return QStringLiteral(
+               "URL: %1\n\nThis is a JavaScript/CSS library, not a document. Do not inline it "
+               "(it would fill the context window). In HTML use:\n<script src=\"%1\"></script>")
+        .arg(href);
+}
+
+static QUrl urlFromFetchedText(const QString &content)
+{
+    const int at = content.indexOf(QStringLiteral("URL: "));
+    if (at < 0)
+    {
+        return {};
+    }
+    const int start = at + 5;
+    int end = content.indexOf(QLatin1Char('\n'), start);
+    if (end < 0)
+    {
+        end = content.size();
+    }
+    return QUrl(content.mid(start, end - start).trimmed());
+}
+
+QString WebSearch::clipForModel(const QString &content)
+{
+    const QUrl u = urlFromFetchedText(content);
+    if (u.isValid() && isStaticAssetUrl(u))
+    {
+        return staticAssetHint(u);
+    }
+    if (content.size() <= kMaxFetchChars)
+    {
+        return content;
+    }
+    QString t = content.left(kMaxFetchChars);
+    t += QStringLiteral("\n\n[truncated]");
+    return t;
+}
+
 QString WebSearch::extractText(const QByteArray &body, const QString &contentType)
 {
     QString ct = contentType;
@@ -218,7 +308,8 @@ QString WebSearch::extractText(const QByteArray &body, const QString &contentTyp
         ct = ct.left(semi);
     ct = ct.trimmed().toLower();
     if (ct.startsWith(QLatin1String("image/")) || ct.startsWith(QLatin1String("audio/"))
-        || ct.startsWith(QLatin1String("video/")) || ct == QLatin1String("application/pdf")
+        || ct.startsWith(QLatin1String("video/")) || isStaticAssetContentType(contentType)
+        || ct == QLatin1String("application/pdf")
         || ct == QLatin1String("application/octet-stream") || ct == QLatin1String("application/zip")
         || ct == QLatin1String("application/gzip"))
         return {};
@@ -401,6 +492,11 @@ void WebSearch::fetch(const QString &urlStr, const std::function<void(QString te
         cb({}, QStringLiteral("that URL is not allowed"));
         return;
     }
+    if (isStaticAssetUrl(url))
+    {
+        cb(staticAssetHint(url), {});
+        return;
+    }
 
     QNetworkRequest req(url);
     req.setTransferTimeout(20000);
@@ -420,8 +516,7 @@ void WebSearch::fetch(const QString &urlStr, const std::function<void(QString te
     QObject::connect(reply, &QNetworkReply::finished, reply, [reply, cb]()
     {
         reply->deleteLater();
-        constexpr int kMaxBytes = 1024 * 1024;
-        constexpr int kMaxChars = 80000;
+        constexpr int kMaxBytes = 512 * 1024;
         if (reply->error() != QNetworkReply::NoError)
         {
             if (reply->error() == QNetworkReply::OperationCanceledError)
@@ -434,6 +529,12 @@ void WebSearch::fetch(const QString &urlStr, const std::function<void(QString te
         const bool clippedBytes = raw.size() > kMaxBytes;
         const QByteArray body = clippedBytes ? raw.left(kMaxBytes) : raw;
         const QString ctype = reply->header(QNetworkRequest::ContentTypeHeader).toString();
+        const QUrl final = reply->url();
+        if (isStaticAssetUrl(final) || isStaticAssetContentType(ctype))
+        {
+            cb(staticAssetHint(final), {});
+            return;
+        }
         QString text = extractText(body, ctype);
         if (text.trimmed().isEmpty())
         {
@@ -441,9 +542,9 @@ void WebSearch::fetch(const QString &urlStr, const std::function<void(QString te
                    ctype.isEmpty() ? QStringLiteral("unknown type") : ctype));
             return;
         }
-        if (text.size() > kMaxChars)
+        if (text.size() > kMaxFetchChars)
         {
-            text.truncate(kMaxChars);
+            text.truncate(kMaxFetchChars);
             text += QStringLiteral("\n\n[truncated]");
         }
         else if (clippedBytes)
