@@ -75,13 +75,57 @@ When you produce a substantial standalone document, UI, diagram, or code file th
 </artifact>
 Common types: text/html, image/svg+xml, text/markdown, text/plain, text/x-python, text/javascript, text/css.
 
-For interactive pages (dashboards, visualizations, tool results the user can click or filter), emit a complete HTML document as type text/html: <!DOCTYPE html>, utf-8, CSS and JS inside the artifact. CDN <script src> and <link> are fine. Do not dump the page into the chat bubble; the desktop client renders the artifact in a side pane with JavaScript enabled.)";
+For interactive pages (dashboards, visualizations, tool results the user can click or filter), emit a complete HTML document as type text/html: <!DOCTYPE html>, utf-8, CSS and JS inside the artifact. CDN <script src> and <link> are fine — never web_fetch .js/.css libraries. Do not dump the page into the chat bubble; the desktop client renders the artifact in a side pane with JavaScript enabled.)";
 
 static const char *kFinalWriteNudge = R"(
 The tool results are already in the transcript. Tool calling is disabled for this turn.
-Never emit <tool_call>, <function=, or similar XML — those are not executed.
-Write the complete final answer now. If the user asked for HTML, markdown, a page, or a report,
-emit a full <artifact type="text/html" ...> (or text/markdown) document. Do not describe what you will do next.)";
+Never emit <tool_call> or web_fetch. Load JS/CSS with <script src> or <link>.
+Write the complete final answer now. If a page, chart, or report was requested, emit a full
+<artifact type="text/html" ...> using the data already gathered. Do not describe what you will do next.)";
+
+static QJsonObject toolFunction(const QJsonObject &call)
+{
+    return call.value(QStringLiteral("function")).toObject();
+}
+
+static QUrl webFetchUrl(const QJsonObject &call)
+{
+    const QJsonObject fn = toolFunction(call);
+    if (fn.value(QStringLiteral("name")).toString() != QLatin1String("web_fetch"))
+    {
+        return {};
+    }
+    const QJsonObject args =
+        QJsonDocument::fromJson(fn.value(QStringLiteral("arguments")).toString().toUtf8()).object();
+    return QUrl(args.value(QStringLiteral("url")).toString().trimmed());
+}
+
+static bool isStaticAssetToolCall(const QJsonObject &call)
+{
+    return WebSearch::isStaticAssetUrl(webFetchUrl(call));
+}
+
+static QString toolFingerprint(const QJsonObject &call)
+{
+    const QJsonObject fn = toolFunction(call);
+    return fn.value(QStringLiteral("name")).toString() + QLatin1Char('\n')
+        + fn.value(QStringLiteral("arguments")).toString().trimmed();
+}
+
+static QJsonArray filterRunnableCalls(const QJsonArray &calls, const QSet<QString> &seen)
+{
+    QJsonArray runnable;
+    for (const QJsonValue &v : calls)
+    {
+        const QJsonObject call = v.toObject();
+        if (isStaticAssetToolCall(call) && seen.contains(toolFingerprint(call)))
+        {
+            continue;
+        }
+        runnable.append(call);
+    }
+    return runnable;
+}
 
 static bool looksLikeToolPreface(const QString &content)
 {
@@ -1302,6 +1346,32 @@ void ChatController::genSetLastToolCalls(const QString &json)
     }
 }
 
+void ChatController::genSetLastContent(const QString &text)
+{
+    if (m_genAttached)
+    {
+        m_messages.setLastContent(text);
+    }
+    else if (!m_genMessages.isEmpty())
+    {
+        m_genMessages.last().content = text;
+        m_genMessages.last().partsReady = false;
+        m_genMessages.last().cachedParts.clear();
+    }
+}
+
+void ChatController::genRemoveLast()
+{
+    if (m_genAttached)
+    {
+        m_messages.removeLast();
+    }
+    else if (!m_genMessages.isEmpty())
+    {
+        m_genMessages.removeLast();
+    }
+}
+
 ChatMessage ChatController::genLast() const
 {
     if (m_genAttached)
@@ -1343,6 +1413,7 @@ void ChatController::endGeneration()
     m_genBackendId.clear();
     m_genThinking.clear();
     m_accTools.clear();
+    m_toolFingerprints.clear();
     m_pendingToolQueue = {};
     m_pendingToolI = 0;
     m_toolRounds = 0;
@@ -1415,6 +1486,13 @@ QVector<ChatMessage> ChatController::apiHistory() const
         }
         if (m.streaming && m.content.isEmpty() && m.toolCallsJson.isEmpty())
             continue;
+        if (m.role == QLatin1String("tool"))
+        {
+            ChatMessage clipped = m;
+            clipped.content = WebSearch::clipForModel(m.content);
+            out.append(clipped);
+            continue;
+        }
         out.append(m);
     }
     for (int i = 0; i < out.size(); ++i)
@@ -1559,6 +1637,12 @@ void ChatController::persistLastAssistant()
 {
     if (m_genPrivate || m_genConvId.isEmpty())
         return;
+    Conversation c = m_store->conversation(m_genConvId);
+    if (c.id.isEmpty())
+    {
+        // Chat was deleted while generating. Do not insert a NULL-id row.
+        return;
+    }
     Message stored = genLast();
     if (stored.id.isEmpty())
         return;
@@ -1566,7 +1650,6 @@ void ChatController::persistLastAssistant()
     if (!stored.createdAt)
         stored.createdAt = nowMs();
     m_store->upsertMessage(stored);
-    Conversation c = m_store->conversation(m_genConvId);
     c.updatedAt = nowMs();
     if (!m_genModel.isEmpty())
     {
@@ -1975,30 +2058,50 @@ void ChatController::onFinished(const QString &reason)
     genFinishLast();
     QJsonArray calls = assembledToolCalls();
     if (calls.isEmpty())
+    {
         calls = ToolCallXml::parse(genLast().content);
+    }
+    const QJsonArray runnable = filterRunnableCalls(calls, m_toolFingerprints);
+
+    if (ToolCallXml::looksLike(genLast().content))
+    {
+        genSetLastContent(ToolCallXml::strip(genLast().content));
+    }
 
     const bool allowTools = !m_forceFinalWrite && m_toolRounds < 8;
-    if (!calls.isEmpty() && allowTools)
+    if (!runnable.isEmpty() && allowTools)
     {
-        genSetLastToolCalls(QString::fromUtf8(QJsonDocument(calls).toJson(QJsonDocument::Compact)));
+        genSetLastToolCalls(QString::fromUtf8(QJsonDocument(runnable).toJson(QJsonDocument::Compact)));
         persistLastAssistant();
-        m_pendingToolQueue = calls;
+        m_pendingToolQueue = runnable;
         m_pendingToolI = 0;
         ++m_toolRounds;
         runPendingTools();
         return;
     }
 
-    persistLastAssistant();
+    const bool blank = genLast().content.trimmed().isEmpty()
+        && genLast().toolCallsJson.isEmpty();
+    if (blank)
+    {
+        genRemoveLast();
+    }
+    else
+    {
+        persistLastAssistant();
+    }
     m_forceFinalWrite = false;
-    if (shouldForceFinalWrite(calls))
+    if (shouldForceFinalWrite(runnable.isEmpty() ? calls : runnable))
     {
         m_forceFinalWrite = true;
         ++m_finalWriteAttempts;
         startGeneration();
         return;
     }
-    extractArtifactsFrom(genLast());
+    if (!blank)
+    {
+        extractArtifactsFrom(genLast());
+    }
     const bool wasAttached = m_genAttached;
     endGeneration();
     emit emptyHintChanged();
@@ -2120,9 +2223,21 @@ void ChatController::runPendingTools()
 void ChatController::executeOneTool()
 {
     const QJsonObject call = m_pendingToolQueue.at(m_pendingToolI).toObject();
-    const QString name = call.value(QStringLiteral("function")).toObject().value(QStringLiteral("name")).toString();
-    const QString argsStr = call.value(QStringLiteral("function")).toObject().value(QStringLiteral("arguments")).toString();
+    const QJsonObject fn = toolFunction(call);
+    const QString name = fn.value(QStringLiteral("name")).toString();
+    const QString argsStr = fn.value(QStringLiteral("arguments")).toString();
     const QString id = call.value(QStringLiteral("id")).toString();
+    const QString fp = toolFingerprint(call);
+    if (m_toolFingerprints.contains(fp))
+    {
+        const QUrl asset = webFetchUrl(call);
+        finishToolMessage(id, name,
+                          WebSearch::isStaticAssetUrl(asset)
+                              ? WebSearch::staticAssetHint(asset)
+                              : QStringLiteral("Already executed this call. Use the earlier result."));
+        return;
+    }
+    m_toolFingerprints.insert(fp);
     if (name == QLatin1String("web_search"))
     {
         QJsonParseError perr;
@@ -2155,6 +2270,11 @@ void ChatController::executeOneTool()
         const QJsonDocument adoc = QJsonDocument::fromJson(argsStr.toUtf8(), &perr);
         const QJsonObject args = adoc.isObject() ? adoc.object() : QJsonObject{};
         const QString url = args.value(QStringLiteral("url")).toString().trimmed();
+        if (WebSearch::isStaticAssetUrl(QUrl(url)))
+        {
+            // One CDN hint is enough; the next model turn must write HTML.
+            m_forceFinalWrite = true;
+        }
         QString activity = QStringLiteral("Fetching page…");
         const QString host = QUrl(url).host();
         if (!host.isEmpty())

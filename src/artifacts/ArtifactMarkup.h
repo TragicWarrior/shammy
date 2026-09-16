@@ -65,6 +65,20 @@ inline bool isPromoteLanguage(const QString &lang)
         || lang == QLatin1String("markdown");
 }
 
+inline int unfencedDocumentStart(const QString &lower)
+{
+    int at = lower.indexOf(QLatin1String("<!doctype html"));
+    if (at < 0)
+    {
+        at = lower.indexOf(QLatin1String("<html"));
+    }
+    if (at < 0)
+    {
+        at = lower.indexOf(QLatin1String("<svg"));
+    }
+    return at;
+}
+
 inline bool isMdSeparatorCell(QString cell)
 {
     cell.remove(QLatin1Char(' '));

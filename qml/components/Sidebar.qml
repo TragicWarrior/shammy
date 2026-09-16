@@ -674,7 +674,9 @@ Rectangle {
             // the title's left edge stays flush; hovering reveals the × instead.
             Text {
                 id: genSpinner
-                visible: chat.generatingConversationId === conversationId && !convHover.containsMouse
+                visible: chat.generatingConversationId.length > 0
+                         && chat.generatingConversationId === conversationId
+                         && !convHover.containsMouse
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.right: parent.right
                 anchors.rightMargin: 8

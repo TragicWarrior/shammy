@@ -37,6 +37,8 @@ public:
     };
 
     QVector<Event> feed(const QByteArray &data);
+    // Parse any leftover bytes that never got a trailing newline.
+    QVector<Event> flush();
     void reset();
 
 private:

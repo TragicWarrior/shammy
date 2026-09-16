@@ -69,6 +69,7 @@ signals:
 private:
     bool exec(const QString &sql);
     bool migrate();
+    void deleteNullIdConversations();
     void indexMessage(const Message &m);
     void reindexConversation(const QString &conversationId);
 

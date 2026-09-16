@@ -78,5 +78,32 @@ QVector<ArtifactDraft> ArtifactExtractor::extract(const QString &content)
         d.content = body;
         out.push_back(d);
     }
+    if (!out.isEmpty())
+    {
+        return out;
+    }
+
+    const QString lower = content.toLower();
+    const int at = ArtifactMarkup::unfencedDocumentStart(lower);
+    if (at >= 0 && content.size() - at >= 200)
+    {
+        ArtifactDraft d;
+        d.content = content.mid(at);
+        if (lower.indexOf(QLatin1String("<svg"), at) == at)
+        {
+            d.identifier = QStringLiteral("svg-document");
+            d.title = QStringLiteral("SVG");
+            d.language = QStringLiteral("svg");
+            d.type = QStringLiteral("image/svg+xml");
+        }
+        else
+        {
+            d.identifier = QStringLiteral("html-document");
+            d.title = QStringLiteral("HTML");
+            d.language = QStringLiteral("html");
+            d.type = QStringLiteral("text/html");
+        }
+        out.push_back(d);
+    }
     return out;
 }

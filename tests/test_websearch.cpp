@@ -94,6 +94,26 @@ private slots:
         QCOMPARE(WebSearch::extractText(QByteArray("# Title\n\nbody"), QStringLiteral("text/markdown")),
                  QString("# Title\n\nbody"));
         QVERIFY(WebSearch::extractText(QByteArray("PNG"), QStringLiteral("image/png")).isEmpty());
+        QVERIFY(WebSearch::extractText(QByteArray("function(){}"), QStringLiteral("application/javascript"))
+                    .isEmpty());
+    }
+
+    void staticAssetsNotInlined()
+    {
+        const QUrl js(QStringLiteral("https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"));
+        QVERIFY(WebSearch::isStaticAssetUrl(js));
+        QVERIFY(WebSearch::isStaticAssetUrl(QUrl(QStringLiteral("https://unpkg.com/foo/bar.css"))));
+        QVERIFY(!WebSearch::isStaticAssetUrl(QUrl(QStringLiteral("https://example.com/docs/readme.md"))));
+        const QString hint = WebSearch::staticAssetHint(js);
+        QVERIFY(hint.contains(QStringLiteral("<script src=")));
+        QVERIFY(!hint.contains(QStringLiteral("function")));
+
+        QString blob = QStringLiteral("URL: %1\n\n").arg(js.toString());
+        blob += QString(80000, QLatin1Char('x'));
+        const QString clipped = WebSearch::clipForModel(QStringLiteral("[web_fetch]\n") + blob);
+        QVERIFY(clipped.size() < 2000);
+        QVERIFY(clipped.contains(QStringLiteral("<script src=")));
+        QVERIFY(!clipped.contains(QString(100, QLatin1Char('x'))));
     }
 };
 

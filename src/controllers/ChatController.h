@@ -222,6 +222,8 @@ private:
     void genAppendReasoningDelta(const QString &text);
     void genFinishLast();
     void genSetLastToolCalls(const QString &json);
+    void genSetLastContent(const QString &text);
+    void genRemoveLast();
     ChatMessage genLast() const;
     QVector<ChatMessage> genAllMessages() const;
     void runPendingTools();
@@ -321,6 +323,7 @@ private:
     int m_finalWriteAttempts = 0;
 
     QMap<int, AccTool> m_accTools;
+    QSet<QString> m_toolFingerprints;
     QJsonArray m_pendingToolQueue;
     int m_pendingToolI = 0;
     bool m_permOpen = false;

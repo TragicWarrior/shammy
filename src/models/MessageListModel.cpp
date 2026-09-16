@@ -1,5 +1,15 @@
 #include "models/MessageListModel.h"
 #include "artifacts/ContentSplitter.h"
+#include "openai/ToolCallXml.h"
+
+static QString visibleContent(const ChatMessage &m)
+{
+    if (m.role == QLatin1String("assistant") && ToolCallXml::looksLike(m.content))
+    {
+        return ToolCallXml::strip(m.content);
+    }
+    return m.content;
+}
 
 MessageListModel::MessageListModel(QObject *parent)
     : QAbstractListModel(parent)
@@ -52,7 +62,7 @@ QVariantList MessageListModel::partsOf(const ChatMessage &m) const
         return {};
     if (!m.partsReady)
     {
-        m.cachedParts = splitParts(m.content);
+        m.cachedParts = splitParts(visibleContent(m));
         m.partsReady = true;
     }
     return m.cachedParts;
@@ -70,7 +80,7 @@ QVariant MessageListModel::data(const QModelIndex &index, int role) const
     case RoleNameRole:
         return m.role;
     case ContentRole:
-        return m.content;
+        return visibleContent(m);
     case ReasoningRole:
         return m.reasoning;
     case StreamingRole:
@@ -151,6 +161,31 @@ void MessageListModel::setLastToolCalls(const QString &json)
     m_items.last().toolCallsJson = json;
     const QModelIndex ix = index(m_items.size() - 1);
     emit dataChanged(ix, ix, {ToolCallsRole});
+}
+
+void MessageListModel::setLastContent(const QString &text)
+{
+    if (m_items.isEmpty())
+    {
+        return;
+    }
+    m_items.last().content = text;
+    m_items.last().partsReady = false;
+    m_items.last().cachedParts.clear();
+    const QModelIndex ix = index(m_items.size() - 1);
+    emit dataChanged(ix, ix, {ContentRole, PartsRole});
+}
+
+void MessageListModel::removeLast()
+{
+    if (m_items.isEmpty())
+    {
+        return;
+    }
+    const int row = m_items.size() - 1;
+    beginRemoveRows({}, row, row);
+    m_items.removeLast();
+    endRemoveRows();
 }
 
 const ChatMessage &MessageListModel::last() const
