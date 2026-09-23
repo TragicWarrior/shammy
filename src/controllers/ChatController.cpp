@@ -2237,9 +2237,9 @@ void ChatController::executeOneTool()
                               : QStringLiteral("Already executed this call. Use the earlier result."));
         return;
     }
-    m_toolFingerprints.insert(fp);
     if (name == QLatin1String("web_search"))
     {
+        m_toolFingerprints.insert(fp);
         QJsonParseError perr;
         const QJsonDocument adoc = QJsonDocument::fromJson(argsStr.toUtf8(), &perr);
         const QJsonObject args = adoc.isObject() ? adoc.object() : QJsonObject{};
@@ -2266,6 +2266,7 @@ void ChatController::executeOneTool()
     }
     if (name == QLatin1String("web_fetch"))
     {
+        m_toolFingerprints.insert(fp);
         QJsonParseError perr;
         const QJsonDocument adoc = QJsonDocument::fromJson(argsStr.toUtf8(), &perr);
         const QJsonObject args = adoc.isObject() ? adoc.object() : QJsonObject{};
@@ -2305,6 +2306,10 @@ void ChatController::executeOneTool()
         finishToolMessage(id, {}, QStringLiteral("unknown tool"));
         return;
     }
+    // Record the call only once it is actually dispatched. The permission
+    // dialog re-enters this function; inserting earlier made approval look
+    // like a duplicate and skipped the tool.
+    m_toolFingerprints.insert(fp);
     QJsonParseError perr;
     const QJsonDocument adoc = QJsonDocument::fromJson(argsStr.toUtf8(), &perr);
     const QJsonObject args = adoc.isObject() ? adoc.object() : QJsonObject{};
