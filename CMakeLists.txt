@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(shammy VERSION 0.9.7 LANGUAGES CXX)
+project(shammy VERSION 0.10.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -179,6 +179,22 @@ if(OpenSSL_FOUND)
     target_link_libraries(shammy PRIVATE OpenSSL::Crypto)
     target_compile_definitions(shammy PRIVATE SHAMMY_OPENSSL)
 endif()
+
+# Binary package lands in releases/ (gitignored). dpkg-buildpackage itself
+# writes next to the source tree; CollectDeb.cmake moves the result.
+set(SHAMMY_RELEASE_DIR "${CMAKE_SOURCE_DIR}/releases")
+add_custom_target(deb
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${SHAMMY_RELEASE_DIR}"
+    COMMAND dpkg-buildpackage --no-sign -b
+    COMMAND ${CMAKE_COMMAND}
+        -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+        -DRELEASE_DIR=${SHAMMY_RELEASE_DIR}
+        -P ${CMAKE_SOURCE_DIR}/cmake/CollectDeb.cmake
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    VERBATIM
+    COMMENT "Build the Debian package into releases/"
+)
 
 include(GNUInstallDirs)
 install(TARGETS shammy RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

@@ -19,6 +19,8 @@ compile_commands.json
 .idea/
 .vscode/
 /obj-*/
+/releases/*
+!/releases/.gitignore
 /debian/.debhelper/
 /debian/files
 /debian/debhelper-build-stamp
