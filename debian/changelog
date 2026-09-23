@@ -1,3 +1,10 @@
+shammy (0.10.0-1) unstable; urgency=medium
+
+  * Run an MCP tool when its permission prompt is approved.
+  * Write Debian packages into releases/.
+
+ -- Bryan Christ <bryan.christ@gmail.com>  Wed, 23 Sep 2026 18:31:16 -0500
+
 shammy (0.9.7-1) unstable; urgency=medium
 
   * Finish hung streams after reasoning instead of spinning forever.

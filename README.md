@@ -39,6 +39,12 @@ ctest --test-dir build --output-on-failure
 ./build/shammy
 ```
 
+A Debian package is a release build. The `.deb`, `.changes`, and `.buildinfo` are written to `releases/` (gitignored; the folder's `.gitignore` is tracked):
+
+```bash
+cmake --build build --target deb
+```
+
 Data lives under `~/.local/share/shammy/` (SQLite). On first launch, an
 existing LlamaChat database and MCP config are copied if Shammy’s paths
 are empty. MCP config uses the
