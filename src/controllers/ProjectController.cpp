@@ -268,7 +268,10 @@ void ProjectController::renameProject(const QString &id, const QString &name)
     Project p = m_store->project(id);
     if (p.id.isEmpty())
         return;
-    p.name = name;
+    const QString next = name.trimmed();
+    if (next.isEmpty() || next == p.name)
+        return;
+    p.name = next;
     p.updatedAt = nowMs();
     m_store->upsertProject(p);
     if (id == m_currentId)
