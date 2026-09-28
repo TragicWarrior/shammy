@@ -101,7 +101,10 @@ Item {
                         leftPadding: 0
                         rightPadding: 0
                         background: Item {}
-                        onEditingFinished: projects.renameProject(projects.currentProjectId, text)
+                        onEditingFinished: {
+                            projects.renameProject(projects.currentProjectId, text)
+                            text = Qt.binding(function() { return projects.currentProjectName })
+                        }
                     }
 
                     TextArea {

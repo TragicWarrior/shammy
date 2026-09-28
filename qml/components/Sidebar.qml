@@ -282,7 +282,7 @@ Rectangle {
                         }
                         ThemedMenu {
                             id: projMenu
-                            ThemedMenuItem { text: "Rename"; onTriggered: projects.renameProject(projectId, name) }
+                            ThemedMenuItem { text: "Rename"; onTriggered: root.renameProject(projectId, name) }
                             ThemedMenuItem {
                                 iconKind: "trash"
                                 text: "Delete"
@@ -442,8 +442,16 @@ Rectangle {
     }
 
     function renameChat(id, title) {
-        renameDialog.convId = id
-        renameDialog.convTitle = title && title.length ? title : "New chat"
+        renameDialog.kind = "chat"
+        renameDialog.targetId = id
+        renameDialog.currentName = title && title.length ? title : "New chat"
+        renameDialog.open()
+    }
+
+    function renameProject(id, name) {
+        renameDialog.kind = "project"
+        renameDialog.targetId = id
+        renameDialog.currentName = name
         renameDialog.open()
     }
 
@@ -530,8 +538,9 @@ Rectangle {
 
     Popup {
         id: renameDialog
-        property string convId: ""
-        property string convTitle: ""
+        property string kind: "chat"
+        property string targetId: ""
+        property string currentName: ""
         modal: true
         parent: Overlay.overlay
         anchors.centerIn: parent
@@ -546,7 +555,7 @@ Rectangle {
             width: parent.width
             spacing: 12
             Text {
-                text: "Rename chat"
+                text: renameDialog.kind === "project" ? "Rename project" : "Rename chat"
                 color: Theme.text
                 font.pixelSize: 16
                 font.weight: Font.DemiBold
@@ -554,7 +563,7 @@ Rectangle {
             TextField {
                 id: renameField
                 width: parent.width
-                text: renameDialog.convTitle
+                text: renameDialog.currentName
                 color: Theme.text
                 selectByMouse: true
                 font.pixelSize: 14
@@ -614,11 +623,14 @@ Rectangle {
             }
         }
         function apply() {
-            chat.renameConversation(convId, renameField.text)
+            if (kind === "project")
+                projects.renameProject(targetId, renameField.text)
+            else
+                chat.renameConversation(targetId, renameField.text)
             close()
         }
         onOpened: {
-            renameField.text = convTitle
+            renameField.text = currentName
             renameField.forceActiveFocus()
             renameField.selectAll()
         }
