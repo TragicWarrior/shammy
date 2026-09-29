@@ -228,6 +228,7 @@ private:
     QVector<ChatMessage> genAllMessages() const;
     void runPendingTools();
     void executeOneTool();
+    void dropMessagesFrom(int from);
     void finishToolMessage(const QString &toolCallId, const QString &name, const QString &content);
     bool webSearchActive() const;
     void setToolActivity(const QString &s);
@@ -326,6 +327,9 @@ private:
     QSet<QString> m_toolFingerprints;
     QJsonArray m_pendingToolQueue;
     int m_pendingToolI = 0;
+    // Bumped whenever a generation ends. Tool results arrive asynchronously and
+    // carry the value they were dispatched under; a stale one is dropped.
+    quint64 m_toolEpoch = 0;
     bool m_permOpen = false;
     QString m_permTool;
     QString m_permServer;

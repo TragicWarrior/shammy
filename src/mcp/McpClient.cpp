@@ -20,6 +20,9 @@ McpClient::McpClient(McpServerConfig cfg, QObject *parent)
 
 McpClient::~McpClient()
 {
+    // Teardown: nobody can be told anything safely once we are being destroyed
+    // (the callbacks may belong to objects that die with us), so drop them.
+    m_pending.clear();
     stop();
 }
 
@@ -43,7 +46,7 @@ void McpClient::start()
     m_error.clear();
     m_tools.clear();
     m_stdoutBuf.clear();
-    m_pending.clear();
+    failPending(QStringLiteral("MCP server restarted"));
     setState(State::Starting);
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     for (auto it = m_cfg.env.begin(); it != m_cfg.env.end(); ++it)
@@ -76,7 +79,7 @@ void McpClient::start()
 void McpClient::stop()
 {
     m_handshakeTimer.stop();
-    m_pending.clear();
+    failPending(QStringLiteral("MCP server stopped"));
     if (m_proc.state() != QProcess::NotRunning)
     {
         m_proc.terminate();
@@ -109,6 +112,7 @@ void McpClient::onFinished(int, QProcess::ExitStatus)
     m_handshakeTimer.stop();
     if (m_state == State::Stopped)
         return;
+    failPending(QStringLiteral("MCP server exited"));
     if (m_state == State::Connected)
     {
         m_error = QStringLiteral("MCP server exited");
@@ -196,6 +200,40 @@ void McpClient::handleMessage(const QByteArray &line)
     }
 }
 
+void McpClient::failPending(const QString &reason)
+{
+    if (m_pending.isEmpty())
+        return;
+    const QList<Pending> calls = m_pending.values();
+    m_pending.clear();
+    // Deliver on the next event-loop turn, never from inside stop()/onFinished():
+    // a callback typically starts the next tool or a new request, which can end
+    // up back in this client or in the host that is in the middle of replacing it.
+    for (const Pending &p : calls)
+    {
+        QTimer::singleShot(0, [cb = p.cb, reason]()
+        {
+            cb({}, reason);
+        });
+    }
+}
+
+void McpClient::expireCall(int id)
+{
+    if (!m_pending.contains(id))
+        return;
+    const auto cb = m_pending.take(id).cb;
+    // Tell the server to stop working on it (MCP notifications/cancelled).
+    if (m_proc.state() == QProcess::Running)
+    {
+        send(JsonRpc::encodeNotification(
+            QStringLiteral("notifications/cancelled"),
+            QJsonObject{{QStringLiteral("requestId"), id},
+                        {QStringLiteral("reason"), QStringLiteral("timed out")}}));
+    }
+    cb({}, QStringLiteral("tool call timed out after %1 s").arg(m_callTimeoutMs / 1000.0, 0, 'g', 3));
+}
+
 void McpClient::callTool(const QString &name, const QJsonObject &args,
                          const std::function<void(QJsonValue, QString)> &cb)
 {
@@ -208,6 +246,15 @@ void McpClient::callTool(const QString &name, const QJsonObject &args,
     if (m_nextId < 10)
         m_nextId = 10;
     m_pending.insert(id, Pending{cb});
+    if (m_callTimeoutMs > 0)
+    {
+        // Ids are never reused, so a late timer for a call that already
+        // finished simply finds nothing pending.
+        QTimer::singleShot(m_callTimeoutMs, this, [this, id]()
+        {
+            expireCall(id);
+        });
+    }
     const QJsonObject params
     {
         {QStringLiteral("name"), name},
