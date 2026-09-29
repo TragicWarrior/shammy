@@ -22,9 +22,10 @@ shammy_test(test_document_extract)
 shammy_test(test_attach)
 shammy_test(test_mcp_client)
 shammy_test(test_web_fetch)
+shammy_test(test_pdf_extract)
 
-# Controller-level test: the controllers and list models live in the app target
-# (next to the QML module), so build the few it needs directly into this test.
+# Controller-level tests: the controllers and list models live in the app target
+# (next to the QML module), so build the few they need directly into each test.
 set(CONTROLLER_TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/controllers/ChatController.cpp
     ${CMAKE_SOURCE_DIR}/src/controllers/ChatController.h
@@ -42,7 +43,11 @@ set(CONTROLLER_TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/models/ProjectListModel.h
     ${CMAKE_SOURCE_DIR}/src/models/SimpleListModels.h
 )
-add_executable(test_chat_controller test_chat_controller.cpp ${CONTROLLER_TEST_SOURCES})
-target_link_libraries(test_chat_controller PRIVATE shammy_core Qt6::Test Qt6::Network Qt6::Sql)
-target_include_directories(test_chat_controller PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_chat_controller COMMAND test_chat_controller)
+function(shammy_controller_test name)
+    add_executable(${name} ${name}.cpp ${CONTROLLER_TEST_SOURCES})
+    target_link_libraries(${name} PRIVATE shammy_core Qt6::Test Qt6::Network Qt6::Sql)
+    target_include_directories(${name} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME ${name} COMMAND ${name})
+endfunction()
+shammy_controller_test(test_chat_controller)
+shammy_controller_test(test_project_files)

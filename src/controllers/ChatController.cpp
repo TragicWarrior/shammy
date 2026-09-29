@@ -5,6 +5,7 @@
 #include "artifacts/DocumentExtract.h"
 #include "artifacts/DocxExport.h"
 #include "artifacts/HtmlDocument.h"
+#include "artifacts/PdfExtract.h"
 #include "artifacts/SpreadsheetExtract.h"
 #include "openai/ToolCallXml.h"
 
@@ -748,6 +749,14 @@ bool ChatController::tryAttachPath(const QString &path, QString *error)
                             .arg(fi.fileName()));
         }
     }
+    else if (kind == Attach::Kind::Pdf)
+    {
+        const QString tool = m_settings->pdftotextBinaryPath();
+        if (!PdfExtract::available(tool))
+        {
+            return fail(QStringLiteral("Can't attach `%1`: %2").arg(fi.fileName(), PdfExtract::missingToolMessage(tool)));
+        }
+    }
     else if (kind == Attach::Kind::Unsupported)
     {
         return fail(QStringLiteral("Can't attach `%1`: that file type isn't supported.")
@@ -1211,6 +1220,23 @@ void ChatController::send()
                          .arg(fi.fileName(), body);
             continue;
         }
+        if (PdfExtract::isPdfPath(path))
+        {
+            QString err;
+            QString body = PdfExtract::extract(path, m_settings->pdftotextBinaryPath(), &err);
+            if (body.isEmpty())
+            {
+                extra += QStringLiteral("\n\nAttached PDF `%1` could not be read: %2")
+                             .arg(fi.fileName(), err.isEmpty() ? QStringLiteral("unknown error") : err);
+                continue;
+            }
+            if (body.size() > 256 * 1024)
+            {
+                body.truncate(256 * 1024);
+            }
+            extra += QStringLiteral("\n\nAttached PDF `%1`:\n```\n%2\n```").arg(fi.fileName(), body);
+            continue;
+        }
         QFile f(path);
         if (!f.open(QIODevice::ReadOnly))
         {
@@ -1461,13 +1487,21 @@ QString ChatController::systemPrompt() const
     const QString instr = m_projects->instructionsFor(projectId);
     if (!instr.isEmpty())
         s += QStringLiteral("\n\n# Project instructions\n") + instr;
-    int inc = 0, trunc = 0;
-    const QString files = m_projects->projectContextFor(projectId, &inc, &trunc);
+    // Size the project files to the window of the model that will read them, so
+    // that the prompt cannot overflow it (the server would cut it from the front).
+    const bool generating = !m_genConvId.isEmpty();
+    const int contextTokens = m_settings->contextSizeFor(
+        generating ? m_genBackendId : m_settings->currentBackendId(),
+        generating ? m_genModel : m_settings->currentModel());
+    int inc = 0, trunc = 0, omitted = 0;
+    const QString files = m_projects->projectContextFor(projectId, contextTokens, &inc, &trunc, &omitted);
     if (!files.isEmpty())
     {
         s += QStringLiteral("\n\n# Project files (%1 included").arg(inc);
         if (trunc)
             s += QStringLiteral(", %1 truncated").arg(trunc);
+        if (omitted)
+            s += QStringLiteral(", %1 left out to fit the context window").arg(omitted);
         s += QStringLiteral(")\n") + files;
     }
     return s;

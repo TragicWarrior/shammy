@@ -214,7 +214,9 @@ void ClaudeImporter::finishImport()
                       .arg(m_importChats == 1 ? QString() : QStringLiteral("s"));
     if (m_importOverCap)
     {
-        msg += QStringLiteral(" Over Shammy’s 256 KB preload cap — extra is stored but not all of it is sent to the model.");
+        msg += QStringLiteral(" Over the preload budget for the selected model (%1 KB) — everything is stored, but not all "
+                              "of it is sent to the model.")
+                   .arg(m_projectsCtl ? m_projectsCtl->preloadBudgetBytes() / 1024 : 0);
     }
     setStatus(msg);
     setError({});
@@ -365,7 +367,7 @@ void ClaudeImporter::importProject(const QString &uuid)
                 bytes += content.toUtf8().size();
                 ++m_importFiles;
             }
-            m_importOverCap = bytes > 256 * 1024;
+            m_importOverCap = bytes > m_projectsCtl->preloadBudgetBytes();
             const QString convPath = QStringLiteral("/api/organizations/%1/projects/%2/conversations")
                                          .arg(m_session.orgId, uuid);
             getJson(convPath, [this](const QJsonDocument &doc, const QString &err)

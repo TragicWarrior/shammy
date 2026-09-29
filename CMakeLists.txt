@@ -49,6 +49,10 @@ set(CORE_SOURCES
     src/artifacts/DocumentExtract.h
     src/artifacts/Attach.cpp
     src/artifacts/Attach.h
+    src/artifacts/FileImport.cpp
+    src/artifacts/FileImport.h
+    src/artifacts/PdfExtract.cpp
+    src/artifacts/PdfExtract.h
     src/mcp/JsonRpc.cpp
     src/mcp/JsonRpc.h
     src/mcp/McpClient.cpp

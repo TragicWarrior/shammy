@@ -30,7 +30,8 @@ Depends: ${shlibs:Depends},
  qml6-module-qtqml,
  qml6-module-qtqml-models,
  qml6-module-qtwebengine
-Recommends: libreoffice-core
+Recommends: libreoffice-core,
+ poppler-utils
 Description: desktop chat client for OpenAI-compatible local backends
  Shammy is a Qt 6 desktop chat client for Ollama, llama.cpp server,
  LM Studio, vLLM, and other OpenAI-compatible /v1 backends. It

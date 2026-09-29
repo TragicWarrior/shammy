@@ -12,6 +12,7 @@ Item {
         fileMode: FileDialog.OpenFiles
         nameFilters: ["All files (*)"]
         onAccepted: {
+            projects.clearFilesError()
             const list = (selectedFiles && selectedFiles.length) ? selectedFiles : [selectedFile]
             for (let i = 0; i < list.length; ++i) {
                 if (list[i] && list[i].toString().length)
@@ -297,10 +298,41 @@ Item {
                         Text {
                             width: parent.width
                             visible: projects.fileOverCapacity
-                            text: "Too much is preloaded. Everything is kept, but only the first 256 KB of files is sent with each chat."
+                            text: "Too much is preloaded. " + projects.fileBudgetNote
                             color: Theme.danger
                             font.pixelSize: 12
                             wrapMode: Text.Wrap
+                        }
+                        Text {
+                            width: parent.width
+                            visible: projects.filesBusy
+                            text: "Converting files…"
+                            color: Theme.muted
+                            font.pixelSize: 12
+                        }
+                        Row {
+                            width: parent.width
+                            visible: projects.filesError.length > 0
+                            spacing: 8
+                            Text {
+                                width: parent.width - dismissError.width - 8
+                                text: projects.filesError
+                                color: Theme.danger
+                                font.pixelSize: 12
+                                wrapMode: Text.Wrap
+                            }
+                            Text {
+                                id: dismissError
+                                text: "×"
+                                color: Theme.muted
+                                font.pixelSize: 14
+                                MouseArea {
+                                    anchors.fill: parent
+                                    anchors.margins: -4
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: projects.clearFilesError()
+                                }
+                            }
                         }
 
                         Rectangle {
@@ -330,6 +362,7 @@ Item {
                             height: projects.files.length === 0 ? 168 : Math.max(168, fileFlow.height)
                             onDropped: function(drop) {
                                 if (drop.hasUrls) {
+                                    projects.clearFilesError()
                                     for (let i = 0; i < drop.urls.length; ++i)
                                         projects.addFile(drop.urls[i])
                                 }
@@ -358,7 +391,7 @@ Item {
                                         width: parent.width
                                         horizontalAlignment: Text.AlignHCenter
                                         wrapMode: Text.Wrap
-                                        text: "or click Add files to browse. Text is preloaded into chats (256 KB cap)."
+                                        text: "or click Add files to browse. Text, Word, PDF and spreadsheet files are preloaded into chats, up to a share of the model's context."
                                         color: Theme.muted
                                         font.pixelSize: 12
                                     }

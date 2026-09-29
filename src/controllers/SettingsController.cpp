@@ -1,6 +1,7 @@
 #include "controllers/SettingsController.h"
 #include "Util.h"
 #include "artifacts/DocxExport.h"
+#include "artifacts/PdfExtract.h"
 #include "compact/Compactor.h"
 #include "openai/ModelCaps.h"
 
@@ -35,6 +36,7 @@ SettingsController::SettingsController(Store *store, OpenAiClient *client, QObje
     m_enableArtifacts = m_qs.value(QStringLiteral("enableArtifacts"), true).toBool();
     m_includeLocalTime = m_qs.value(QStringLiteral("includeLocalTime"), true).toBool();
     m_officeBinaryPath = m_qs.value(QStringLiteral("officeBinaryPath")).toString().trimmed();
+    m_pdftotextBinaryPath = m_qs.value(QStringLiteral("pdftotextBinaryPath")).toString().trimmed();
     m_compactionThreshold = Compact::clampThreshold(
         m_qs.value(QStringLiteral("compactionThreshold"), Compact::kDefaultThresholdPct).toInt());
     m_temperature = m_qs.value(QStringLiteral("temperature"), 0.7).toDouble();
@@ -572,6 +574,31 @@ void SettingsController::setOfficeBinaryPath(const QString &p)
     m_officeBinaryPath = v;
     m_qs.setValue(QStringLiteral("officeBinaryPath"), v);
     emit officeBinaryPathChanged();
+}
+
+void SettingsController::setPdftotextBinaryPath(const QString &p)
+{
+    QString v = p.trimmed();
+    if (v.startsWith(QLatin1String("file:")))
+        v = QUrl(v).toLocalFile();
+    if (v.startsWith(QLatin1Char('~'))
+        && (v.size() == 1 || v.at(1) == QLatin1Char('/') || v.at(1) == QLatin1Char('\\')))
+        v = QDir::homePath() + v.mid(1);
+    if (m_pdftotextBinaryPath == v)
+        return;
+    m_pdftotextBinaryPath = v;
+    m_qs.setValue(QStringLiteral("pdftotextBinaryPath"), v);
+    emit pdftotextBinaryPathChanged();
+}
+
+QString SettingsController::pdftotextDetectedPath() const
+{
+    return PdfExtract::pdftotextPath({});
+}
+
+QString SettingsController::resolvePdftotext(const QString &overridePath) const
+{
+    return PdfExtract::pdftotextPath(overridePath);
 }
 
 QString SettingsController::officeDetectedPath() const

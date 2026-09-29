@@ -25,7 +25,8 @@ private slots:
         QCOMPARE(Attach::kindForMime(QStringLiteral("image/png")), Attach::Kind::Image);
         QCOMPARE(Attach::kindForMime(QStringLiteral("text/plain")), Attach::Kind::Text);
         QCOMPARE(Attach::kindForMime(QStringLiteral("application/json")), Attach::Kind::Text);
-        QCOMPARE(Attach::kindForMime(QStringLiteral("application/pdf")), Attach::Kind::Unsupported);
+        QCOMPARE(Attach::kindForMime(QStringLiteral("application/pdf")), Attach::Kind::Pdf);
+        QCOMPARE(Attach::kindForMime(QStringLiteral("application/octet-stream"), QStringLiteral("PDF")), Attach::Kind::Pdf);
         QCOMPARE(Attach::kindForMime(QStringLiteral("application/zip")), Attach::Kind::Unsupported);
         QCOMPARE(Attach::kindForMime(
                      QStringLiteral(
@@ -80,7 +81,8 @@ private slots:
         QCOMPARE(Attach::kindForPath(write(QStringLiteral("memo.docx"), QByteArray("PK"))), Attach::Kind::Document);
         QCOMPARE(Attach::kindForPath(write(QStringLiteral("notes.odt"), QByteArray("PK"))), Attach::Kind::Document);
         QCOMPARE(Attach::kindForPath(write(QStringLiteral("letter.rtf"), QByteArray("{\\rtf"))), Attach::Kind::Document);
-        QCOMPARE(Attach::kindForPath(write(QStringLiteral("file.pdf"), QByteArray("%PDF-1.4"))), Attach::Kind::Unsupported);
+        QCOMPARE(Attach::kindForPath(write(QStringLiteral("file.pdf"), QByteArray("%PDF-1.4"))), Attach::Kind::Pdf);
+        QCOMPARE(Attach::kindForPath(write(QStringLiteral("SHOUT.PDF"), QByteArray("%PDF-1.4"))), Attach::Kind::Pdf);
         QCOMPARE(Attach::kindForPath(write(QStringLiteral("pic.png"), QByteArray("\x89PNG"))), Attach::Kind::Image);
         QCOMPARE(Attach::kindForPath(write(QStringLiteral("noext"), QByteArray("just words"))), Attach::Kind::Text);
         QCOMPARE(Attach::kindForPath(write(QStringLiteral("blob.bin"), QByteArray("\x00\x01\x02\xff", 4))),

@@ -1,3 +1,4 @@
+#include "artifacts/PdfExtract.h"
 #include "controllers/ChatController.h"
 #include "controllers/McpController.h"
 #include "controllers/ProjectController.h"
@@ -243,6 +244,24 @@ private:
     QTcpServer m_server;
 };
 
+
+// A stand-in for pdftotext: "scanned" files have no text.
+const char *kFakePdftotext = R"(#!/bin/sh
+file=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -enc) shift ;;
+    -layout|-) ;;
+    *) file="$1" ;;
+  esac
+  shift
+done
+case "$file" in
+  *scanned*) exit 0 ;;
+esac
+printf 'Quarterly Report\n\nNorth   120 135\n'
+)";
+
 template <class Pred>
 bool waitFor(Pred pred, int ms = 8000)
 {
@@ -361,6 +380,36 @@ QString systemText(const QJsonObject &request)
 
 const auto numbered = [](int i, const QJsonObject &) { return FakeOpenAi::text(QStringLiteral("reply %1").arg(i + 1)); };
 
+struct PdfRig
+{
+    QTemporaryDir dir;
+    QString tool;
+    QString pdf(const QString &name)
+    {
+        const QString path = dir.filePath(name);
+        QFile f(path);
+        f.open(QIODevice::WriteOnly);
+        f.write("%PDF-1.4\n");
+        return path;
+    }
+    PdfRig()
+    {
+        tool = dir.filePath(QStringLiteral("pdftotext"));
+        QFile f(tool);
+        f.open(QIODevice::WriteOnly);
+        f.write(kFakePdftotext);
+        f.close();
+        QFile::setPermissions(tool, QFile::permissions(tool) | QFileDevice::ExeOwner);
+    }
+};
+// The setting lives in the QSettings file every test here shares.
+struct PdfToolReset
+{
+    SettingsController &s;
+    ~PdfToolReset() { s.setPdftotextBinaryPath({}); }
+};
+
+
 } // namespace
 
 class TestChatController : public QObject
@@ -385,6 +434,93 @@ private slots:
         QStandardPaths::setTestModeEnabled(true);
         QCoreApplication::setOrganizationName(QStringLiteral("shammy-test"));
         QCoreApplication::setApplicationName(QStringLiteral("shammy-test"));
+    }
+
+    // -- PDFs: read with pdftotext, and only while it is found -------------------
+
+    void anAttachedPdfIsReadAndSentWithTheMessage()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        PdfRig rig;
+        PdfToolReset reset{*f.settings};
+        f.settings->setPdftotextBinaryPath(rig.tool);
+        f.chat->newChat();
+        f.chat->attachFile(rig.pdf(QStringLiteral("paper.pdf")));
+        QVERIFY2(f.chat->errorBanner().isEmpty(), qPrintable(f.chat->errorBanner()));
+        QCOMPARE(f.chat->pendingAttachments().size(), 1);
+        QVERIFY(f.say(QStringLiteral("summarize this")));
+        const QString sent = userTexts(f.ai.requests.last()).last();
+        QVERIFY2(sent.contains(QLatin1String("summarize this")), qPrintable(sent));
+        QVERIFY2(sent.contains(QLatin1String("Attached PDF `paper.pdf`")), qPrintable(sent));
+        QVERIFY(sent.contains(QLatin1String("Quarterly Report")));
+        QVERIFY(sent.contains(QLatin1String("North   120 135")));
+    }
+
+    void aPdfIsNotAttachedWhenPdftotextIsNotFound()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        PdfRig rig;
+        PdfToolReset reset{*f.settings};
+        const QString bad = rig.dir.filePath(QStringLiteral("no-such-pdftotext"));
+        f.settings->setPdftotextBinaryPath(bad);
+        f.chat->newChat();
+        f.chat->attachFile(rig.pdf(QStringLiteral("paper.pdf")));
+        // Refused up front, with the reason, like a Word file without LibreOffice.
+        QVERIFY2(f.chat->errorBanner().contains(QLatin1String("Can't attach `paper.pdf`")), qPrintable(f.chat->errorBanner()));
+        QVERIFY2(f.chat->errorBanner().contains(QLatin1String("No usable pdftotext")), qPrintable(f.chat->errorBanner()));
+        QVERIFY(f.chat->errorBanner().contains(bad));
+        QCOMPARE(f.chat->pendingAttachments().size(), 0);
+        // Everything else still attaches.
+        QFile txt(rig.dir.filePath(QStringLiteral("notes.txt")));
+        QVERIFY(txt.open(QIODevice::WriteOnly));
+        txt.write("plain notes");
+        txt.close();
+        f.chat->attachFile(txt.fileName());
+        QCOMPARE(f.chat->pendingAttachments().size(), 1);
+        QVERIFY(f.chat->errorBanner().isEmpty());
+    }
+
+    void aPdfWithNoTextSaysItCouldNotBeRead()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        PdfRig rig;
+        PdfToolReset reset{*f.settings};
+        f.settings->setPdftotextBinaryPath(rig.tool);
+        f.chat->newChat();
+        f.chat->attachFile(rig.pdf(QStringLiteral("scanned.pdf")));
+        QCOMPARE(f.chat->pendingAttachments().size(), 1);
+        QVERIFY(f.say(QStringLiteral("what is in it?")));
+        const QString sent = userTexts(f.ai.requests.last()).last();
+        QVERIFY2(sent.contains(QLatin1String("Attached PDF `scanned.pdf` could not be read")), qPrintable(sent));
+        QVERIFY(sent.contains(QLatin1String("OCR")));
+    }
+
+    void thePdftotextSettingIsNormalizedPersistedAndResolved()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        PdfRig rig;
+        PdfToolReset reset{*f.settings};
+        QCOMPARE(f.settings->pdftotextBinaryPath(), QString());
+
+        f.settings->setPdftotextBinaryPath(QStringLiteral("  ") + QUrl::fromLocalFile(rig.tool).toString() + QStringLiteral("  "));
+        QCOMPARE(f.settings->pdftotextBinaryPath(), rig.tool); // file: URL and padding removed
+        QCOMPARE(f.settings->resolvePdftotext(rig.tool), rig.tool);
+        QCOMPARE(f.settings->resolvePdftotext(rig.dir.path()), rig.tool); // a folder holding it
+        QVERIFY(f.settings->resolvePdftotext(rig.dir.filePath(QStringLiteral("nope"))).isEmpty());
+        QCOMPARE(f.settings->pdftotextDetectedPath(), PdfExtract::pdftotextPath());
+
+        QSignalSpy spy(f.settings.get(), &SettingsController::pdftotextBinaryPathChanged);
+        f.settings->setPdftotextBinaryPath(rig.tool); // same value: no signal
+        QCOMPARE(spy.count(), 0);
+        f.settings->setPdftotextBinaryPath({});
+        QCOMPARE(spy.count(), 1);
+        f.settings->setPdftotextBinaryPath(rig.tool);
+        SettingsController again(&f.store, &f.client);
+        QCOMPARE(again.pdftotextBinaryPath(), rig.tool); // read back from the stored settings
     }
 
     // -- Web fetch limits (Settings) ---------------------------------------------
@@ -640,6 +776,59 @@ private slots:
         }
         QVERIFY2(toolText.contains(QLatin1String("exited")), qPrintable(toolText));
         QCOMPARE(f.chat->messages()->all().last().content, QStringLiteral("recovered"));
+    }
+
+    // -- Project files are sized to the model's context window -------------------
+
+    void projectFilesInThePromptFitTheModelsContext()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        const QString backend = f.settings->currentBackendId();
+        // The context size is stored in the QSettings file every test here shares.
+        struct Reset
+        {
+            SettingsController &s;
+            QString backend;
+            ~Reset() { s.setModelContextFromText(backend, QStringLiteral("test-model"), QStringLiteral("16k")); }
+        } reset{*f.settings, backend};
+
+        f.projects->createProject(QStringLiteral("Prompt size"));
+        const QString projectId = f.projects->currentProjectId();
+        // Delete the project (and so its files) even if a check below fails.
+        struct DeleteProject
+        {
+            ProjectController &p;
+            QString id;
+            ~DeleteProject() { p.deleteProject(id); }
+        } cleanup{*f.projects, projectId};
+        for (const char *name : {"a.txt", "b.txt", "c.txt"})
+            f.projects->addFileFromContent(QString::fromLatin1(name), QByteArray(20000, name[0]));
+
+        // A 16K window: the three 20 KB files do not all fit in 40% of it.
+        f.settings->setModelContextFromText(backend, QStringLiteral("test-model"), QStringLiteral("16k"));
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("hello")));
+        const QString small = systemText(f.ai.requests.last());
+        QVERIFY2(small.contains(QLatin1String("left out to fit the context window")), qPrintable(small.left(400)));
+        QVERIFY2(small.toUtf8().size() < 30000, qPrintable(QString::number(small.toUtf8().size())));
+        QVERIFY(small.contains(QLatin1String("## a.txt")));
+        QVERIFY(!small.contains(QLatin1String("## c.txt")));
+
+        // A 256K window takes all of it.
+        f.settings->setModelContextFromText(backend, QStringLiteral("test-model"), QStringLiteral("256k"));
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("hello again")));
+        const QString big = systemText(f.ai.requests.last());
+        QVERIFY(!big.contains(QLatin1String("left out")));
+        QVERIFY(big.contains(QLatin1String("## a.txt")));
+        QVERIFY(big.contains(QLatin1String("## b.txt")));
+        QVERIFY(big.contains(QLatin1String("## c.txt")));
+        QVERIFY(big.toUtf8().size() > 60000);
+
+        f.projects->deleteProject(projectId); // and its files go with it
+        QVERIFY(!QFileInfo::exists(ProjectController::projectsRoot() + QLatin1Char('/') + projectId));
+        cleanup.id.clear(); // already gone
     }
 
     // -- Stop cancels a web fetch that is still downloading ---------------------
