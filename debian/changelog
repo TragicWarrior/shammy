@@ -1,3 +1,12 @@
+shammy (0.11.1-1) unstable; urgency=medium
+
+  * Keep history when regenerating or editing in a private chat.
+  * Keep the compaction summary when regenerating or editing.
+  * Fail MCP tool calls whose server stops or goes quiet instead of hanging.
+  * Drop tool results that arrive after their reply has ended.
+
+ -- Bryan Christ <bryan.christ@gmail.com>  Mon, 28 Sep 2026 22:39:28 -0500
+
 shammy (0.11.0-1) unstable; urgency=medium
 
   * Fix project rename: the sidebar Rename item now opens a rename dialog.
