@@ -110,6 +110,34 @@ dashboards) flatten to a static document. Install with
 `sudo apt-get install libreoffice`. The artifact in Shammy stays HTML
 or markdown; Word is a download, not a second source of truth.
 
+## Web tools
+
+With **Tools** on for a model, it can call `web_fetch` to read a page and,
+with a search key set (Settings → General → Web search), `web_search`.
+
+`web_fetch` reads a page as text and stops as soon as going on cannot help:
+
+- **Size:** at most 1 MB of the page is read, then the download is cut off
+  and the result is marked `[truncated]`. What the model receives is trimmed
+  further, to about 24,000 characters of extracted text.
+- **Type:** images, audio, video, PDFs, archives and other non-text responses
+  are refused from their headers, before the body is read. A response that
+  claims to be text but is binary is refused after its first few KB.
+- **Time:** a fetch is abandoned when no data arrives for the *stall timeout*
+  (Settings → Advanced, default 30 s). The timer restarts whenever more data
+  arrives, so a slow but steady download is not cut off. Separately, one fetch
+  may take at most the *page fetch time limit* (Settings → General → Web
+  search, default 300 s) including redirects. Stop also cancels a fetch.
+- **Where it may go:** only `http` and `https` addresses on the public
+  internet. Loopback, private, link-local, multicast and other reserved
+  ranges are refused (IPv4 and IPv6, including IPv4 addresses written as
+  IPv6), as are single-label and local-network names such as `router`,
+  `printer.local` and `*.lan`. A hostname is looked up first and refused if
+  *any* address it resolves to is not public. Redirects are followed by hand
+  and every hop gets the same checks. The check cannot stop a DNS server that
+  answers differently the second time (DNS rebinding); it narrows that window
+  but does not close it.
+
 ## Contributing
 
 Bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).

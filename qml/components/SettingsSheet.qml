@@ -39,6 +39,8 @@ Popup {
         property bool webSearchEnabled: false
         property string webSearchProvider: "brave"
         property string webSearchApiKey: ""
+        property int webFetchTimeoutSeconds: 300
+        property int webFetchStallSeconds: 30
     }
 
     function loadDraft() {
@@ -60,6 +62,8 @@ Popup {
         draft.webSearchEnabled = settings.webSearchEnabled
         draft.webSearchProvider = settings.webSearchProvider
         draft.webSearchApiKey = settings.webSearchApiKey
+        draft.webFetchTimeoutSeconds = settings.webFetchTimeoutSeconds
+        draft.webFetchStallSeconds = settings.webFetchStallSeconds
         draftBackends.clear()
         const backends = settings.backendSnapshot()
         for (let i = 0; i < backends.length; ++i)
@@ -87,6 +91,8 @@ Popup {
         settings.webSearchEnabled = draft.webSearchEnabled
         settings.webSearchProvider = draft.webSearchProvider
         settings.webSearchApiKey = draft.webSearchApiKey
+        settings.webFetchTimeoutSeconds = draft.webFetchTimeoutSeconds
+        settings.webFetchStallSeconds = draft.webFetchStallSeconds
         const backends = []
         for (let i = 0; i < draftBackends.count; ++i) {
             const r = draftBackends.get(i)
@@ -473,6 +479,36 @@ Popup {
                             color: Theme.text
                             onTextChanged: draft.webSearchApiKey = text
                             background: Rectangle { color: Theme.panel; radius: 8; border.color: Theme.border }
+                        }
+                        Text {
+                            text: "Page fetch time limit"
+                            color: Theme.muted
+                            font.pixelSize: 12
+                            Layout.leftMargin: 24
+                        }
+                        RowLayout {
+                            Layout.leftMargin: 24
+                            Layout.rightMargin: 24
+                            spacing: 12
+                            SpinBox {
+                                from: settings.webFetchTimeoutMin
+                                to: settings.webFetchTimeoutMax
+                                stepSize: 30
+                                editable: true
+                                value: draft.webFetchTimeoutSeconds
+                                onValueModified: draft.webFetchTimeoutSeconds = value
+                            }
+                            Text { text: "seconds"; color: Theme.text; font.pixelSize: 13 }
+                        }
+                        Text {
+                            text: "The most time one page fetch may take in total, including redirects. Default "
+                                  + settings.webFetchTimeoutDefault + " s. A fetch is also stopped sooner if it stalls; see Advanced."
+                            color: Theme.muted
+                            wrapMode: Text.Wrap
+                            font.pixelSize: 12
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 24
+                            Layout.rightMargin: 24
                         }
 
                         Item { Layout.preferredHeight: 20 }
@@ -917,7 +953,7 @@ Popup {
                             Layout.leftMargin: 24
                         }
                         Text {
-                            text: "How Shammy manages a long conversation, and extra document features."
+                            text: "How Shammy manages a long conversation, extra document features, and how long it waits on web pages."
                             color: Theme.muted
                             font.pixelSize: 12
                             wrapMode: Text.Wrap
@@ -1033,6 +1069,43 @@ Popup {
                                             }
                                         }
                                     }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 24
+                            Layout.rightMargin: 24
+                            radius: 12
+                            color: Theme.panel
+                            implicitHeight: stallCol.height + 24
+                            ColumnLayout {
+                                id: stallCol
+                                x: 16
+                                y: 12
+                                width: parent.width - 32
+                                spacing: 8
+                                Text { text: "Web fetch stall timeout"; color: Theme.text; font.pixelSize: 14 }
+                                Text {
+                                    text: "A page fetch is abandoned when no data at all arrives for this long. The timer restarts whenever more data arrives, so a slow but steady download is not cut off. Default "
+                                          + settings.webFetchStallDefault + " s."
+                                    color: Theme.muted
+                                    font.pixelSize: 12
+                                    wrapMode: Text.Wrap
+                                    Layout.fillWidth: true
+                                }
+                                RowLayout {
+                                    spacing: 12
+                                    SpinBox {
+                                        from: settings.webFetchStallMin
+                                        to: settings.webFetchStallMax
+                                        stepSize: 5
+                                        editable: true
+                                        value: draft.webFetchStallSeconds
+                                        onValueModified: draft.webFetchStallSeconds = value
+                                    }
+                                    Text { text: "seconds"; color: Theme.text; font.pixelSize: 13 }
                                 }
                             }
                         }

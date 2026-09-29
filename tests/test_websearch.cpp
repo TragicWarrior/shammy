@@ -71,6 +71,67 @@ private slots:
         QVERIFY(!WebSearch::urlAllowed(QUrl(QStringLiteral("https://169.254.169.254/latest"))));
     }
 
+    void urlAllowedRejectsPrivateAddressesInEveryDisguise()
+    {
+        QStringList leaks;
+        const auto blocked = [&leaks](const char *url)
+        {
+            if (WebSearch::urlAllowed(QUrl(QString::fromLatin1(url))))
+                leaks << QString::fromLatin1(url);
+            return true;
+        };
+        // IPv4 addresses written as IPv6 (this used to skip the IPv4 range check).
+        QVERIFY(blocked("http://[::ffff:10.1.2.3]/"));
+        QVERIFY(blocked("http://[::ffff:192.168.1.1]/"));
+        QVERIFY(blocked("http://[::ffff:127.0.0.1]/"));
+        QVERIFY(blocked("http://[::ffff:169.254.169.254]/latest/meta-data"));
+        QVERIFY(blocked("http://[64:ff9b::a01:203]/"));   // NAT64 -> 10.1.2.3
+        QVERIFY(blocked("http://[2002:0a01:0203::1]/"));  // 6to4  -> 10.1.2.3
+        // IPv6 ranges that are never public.
+        QVERIFY(blocked("http://[fd00::1]/"));            // unique local
+        QVERIFY(blocked("http://[fc00::1]/"));
+        QVERIFY(blocked("http://[fe80::1]/"));
+        QVERIFY(blocked("http://[::1]/"));
+        QVERIFY(blocked("http://[::]/"));
+        QVERIFY(blocked("http://[ff02::1]/"));
+        QVERIFY(blocked("http://[2001:db8::1]/"));
+        // Other IPv4 ranges that are never public.
+        QVERIFY(blocked("http://0.1.2.3/"));
+        QVERIFY(blocked("http://100.64.0.1/"));
+        QVERIFY(blocked("http://172.16.0.1/"));
+        QVERIFY(blocked("http://172.31.255.255/"));
+        QVERIFY(blocked("http://198.18.0.1/"));
+        QVERIFY(blocked("http://224.0.0.1/"));
+        QVERIFY(blocked("http://255.255.255.255/"));
+        // Alternate spellings of loopback (QUrl normalizes these to 127.0.0.1).
+        QVERIFY(blocked("http://2130706433/"));
+        QVERIFY(blocked("http://0x7f.1/"));
+        QVERIFY(blocked("http://127.1/"));
+        // Names that are never public.
+        QVERIFY(blocked("http://localhost./"));
+        QVERIFY(blocked("http://foo.localhost/"));
+        QVERIFY(blocked("http://printer.local/"));
+        QVERIFY(blocked("http://router.lan/"));
+        QVERIFY(blocked("http://nas.home.arpa/"));
+        QVERIFY(blocked("http://metadata.google.internal/computeMetadata/v1/"));
+        QVERIFY(blocked("http://db.internal/"));
+        QVERIFY(blocked("http://nas/"));                  // single label: resolves via the LAN's search domain
+        QVERIFY(blocked("http://router/admin"));
+        QVERIFY2(leaks.isEmpty(), qPrintable(QStringLiteral("still allowed:\n  ") + leaks.join(QStringLiteral("\n  "))));
+    }
+
+    void urlAllowedStillAllowsPublicAddresses()
+    {
+        QVERIFY(WebSearch::urlAllowed(QUrl(QStringLiteral("https://example.com/"))));
+        QVERIFY(WebSearch::urlAllowed(QUrl(QStringLiteral("http://8.8.8.8/"))));
+        QVERIFY(WebSearch::urlAllowed(QUrl(QStringLiteral("http://[2606:4700::1111]/"))));
+        QVERIFY(WebSearch::urlAllowed(QUrl(QStringLiteral("http://[::ffff:8.8.8.8]/"))));  // mapped public address
+        QVERIFY(WebSearch::urlAllowed(QUrl(QStringLiteral("http://172.32.0.1/"))));       // just outside 172.16/12
+        QVERIFY(WebSearch::urlAllowed(QUrl(QStringLiteral("http://100.63.255.255/"))));   // just outside 100.64/10
+        QVERIFY(WebSearch::urlAllowed(QUrl(QStringLiteral("https://sub.example.co.uk:8443/p?q=1"))));
+        QVERIFY(WebSearch::urlAllowed(QUrl(QStringLiteral("https://localhost.example.com/"))));  // not the same as localhost
+    }
+
     void canonicalizeGitHub()
     {
         QCOMPARE(WebSearch::canonicalizeFetchUrl(QUrl(QStringLiteral("https://github.com/foo/bar"))).toString(),
