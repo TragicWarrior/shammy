@@ -26,6 +26,10 @@ public:
 
     void start();
     void stop();
+    // A tool call that gets no reply within this long is failed so the chat is
+    // never left waiting on a server that has gone quiet. Settable for tests.
+    void setCallTimeoutMs(int ms) { m_callTimeoutMs = ms; }
+    int callTimeoutMs() const { return m_callTimeoutMs; }
     void callTool(const QString &name, const QJsonObject &args,
                   const std::function<void(QJsonValue result, QString error)> &cb);
 
@@ -42,6 +46,8 @@ private:
     void send(const QByteArray &line);
     void handshakeTimeout();
     void handleMessage(const QByteArray &line);
+    void failPending(const QString &reason);
+    void expireCall(int id);
 
     McpServerConfig m_cfg;
     QProcess m_proc;
@@ -51,6 +57,7 @@ private:
     QString m_log;
     QList<McpTool> m_tools;
     int m_nextId = 10;
+    int m_callTimeoutMs = 300000;
     QTimer m_handshakeTimer;
     struct Pending
     {

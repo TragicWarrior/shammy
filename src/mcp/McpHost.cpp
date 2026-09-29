@@ -88,6 +88,14 @@ bool McpHost::save() const
 
 void McpHost::rebuildClients()
 {
+    // Stop before deleting so calls still in flight are failed with a reason
+    // (a destroyed client drops its callbacks silently). Disconnect first so the
+    // teardown does not fan out state changes for clients about to disappear.
+    for (McpClient *c : m_clients)
+    {
+        c->disconnect(this);
+        c->stop();
+    }
     qDeleteAll(m_clients);
     m_clients.clear();
     for (const McpServerConfig &c : m_configs)

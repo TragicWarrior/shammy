@@ -1416,6 +1416,7 @@ void ChatController::endGeneration()
     m_toolFingerprints.clear();
     m_pendingToolQueue = {};
     m_pendingToolI = 0;
+    ++m_toolEpoch;
     m_toolRounds = 0;
     m_forceFinalWrite = false;
     m_finalWriteAttempts = 0;
@@ -2228,6 +2229,17 @@ void ChatController::executeOneTool()
     const QString argsStr = fn.value(QStringLiteral("arguments")).toString();
     const QString id = call.value(QStringLiteral("id")).toString();
     const QString fp = toolFingerprint(call);
+    // Web and MCP results come back asynchronously and cannot be cancelled. If
+    // the generation has ended in the meantime (Stop, new chat, a new message),
+    // the result belongs to nobody: delivering it would add a stray tool message
+    // to the next reply and restart the stream under it.
+    const quint64 epoch = m_toolEpoch;
+    const auto deliver = [this, epoch, id](const QString &toolName, const QString &content)
+    {
+        if (epoch != m_toolEpoch)
+            return;
+        finishToolMessage(id, toolName, content);
+    };
     if (m_toolFingerprints.contains(fp))
     {
         const QUrl asset = webFetchUrl(call);
@@ -2257,10 +2269,9 @@ void ChatController::executeOneTool()
         }
         setToolActivity(activity);
         m_web.search(m_settings->webSearchProvider(), m_settings->webSearchApiKey(), query,
-                     [this, id](const QString &text, const QString &error)
+                     [deliver](const QString &text, const QString &error)
                      {
-                         finishToolMessage(id, QStringLiteral("web_search"),
-                                           error.isEmpty() ? text : error);
+                         deliver(QStringLiteral("web_search"), error.isEmpty() ? text : error);
                      });
         return;
     }
@@ -2281,9 +2292,9 @@ void ChatController::executeOneTool()
         if (!host.isEmpty())
             activity = QStringLiteral("Fetching %1…").arg(host);
         setToolActivity(activity);
-        m_web.fetch(url, [this, id](const QString &text, const QString &error)
+        m_web.fetch(url, [deliver](const QString &text, const QString &error)
         {
-            finishToolMessage(id, QStringLiteral("web_fetch"), error.isEmpty() ? text : error);
+            deliver(QStringLiteral("web_fetch"), error.isEmpty() ? text : error);
         });
         return;
     }
@@ -2313,7 +2324,7 @@ void ChatController::executeOneTool()
     QJsonParseError perr;
     const QJsonDocument adoc = QJsonDocument::fromJson(argsStr.toUtf8(), &perr);
     const QJsonObject args = adoc.isObject() ? adoc.object() : QJsonObject{};
-    m_mcp->host()->callTool(name, args, [this, id, name](const QJsonValue &result, const QString &error)
+    m_mcp->host()->callTool(name, args, [deliver, name](const QJsonValue &result, const QString &error)
     {
         QString content;
         if (!error.isEmpty())
@@ -2335,7 +2346,7 @@ void ChatController::executeOneTool()
         {
             content = result.toString();
         }
-        finishToolMessage(id, name, content);
+        deliver(name, content);
     });
 }
 
@@ -2360,6 +2371,38 @@ void ChatController::resolvePermission(const QString &decision)
     executeOneTool();
 }
 
+// Drops the open conversation's messages from row `from` onwards. Compaction
+// summaries are kept: they stand in for older history that no longer exists
+// anywhere else. A private chat lives only in the model, so it is cut in place;
+// reloading it from the store would find nothing (and end the private session).
+// Saved chats are deleted by id, not by timestamp, so only these rows go.
+void ChatController::dropMessagesFrom(int from)
+{
+    const QVector<ChatMessage> all = m_messages.all();
+    if (from < 0 || from >= all.size())
+        return;
+    QVector<ChatMessage> kept = all.mid(0, from);
+    QStringList doomed;
+    for (int i = from; i < all.size(); ++i)
+    {
+        if (Compact::isCompactMessage(all.at(i)))
+            kept.append(all.at(i));
+        else
+            doomed.append(all.at(i).id);
+    }
+    if (m_private)
+    {
+        m_messages.setMessages(kept);
+        m_toolRounds = 0;
+        m_forceFinalWrite = false;
+        m_finalWriteAttempts = 0;
+        refreshContextUsage();
+        return;
+    }
+    m_store->deleteMessages(doomed);
+    openConversation(m_convId);
+}
+
 void ChatController::regenerate()
 {
     if (m_streaming || m_compacting || m_convId.isEmpty())
@@ -2368,7 +2411,7 @@ void ChatController::regenerate()
     {
         stop();
     }
-    auto all = m_messages.all();
+    const QVector<ChatMessage> all = m_messages.all();
     int lastUser = -1;
     for (int i = all.size() - 1; i >= 0; --i)
     {
@@ -2378,16 +2421,10 @@ void ChatController::regenerate()
             break;
         }
     }
-    if (lastUser < 0)
+    // Keep the user message, drop everything after it.
+    if (lastUser < 0 || lastUser + 1 >= all.size())
         return;
-    qint64 from = all[lastUser].createdAt;
-    // keep the user message, drop after
-    if (lastUser + 1 < all.size())
-        from = all[lastUser + 1].createdAt;
-    else
-        return;
-    m_store->deleteMessagesFrom(m_convId, from);
-    openConversation(m_convId);
+    dropMessagesFrom(lastUser + 1);
     m_toolRounds = 0;
     startGeneration();
 }
@@ -2400,7 +2437,7 @@ void ChatController::editAndResend(const QString &messageId, const QString &newT
     {
         stop();
     }
-    auto all = m_messages.all();
+    const QVector<ChatMessage> all = m_messages.all();
     int idx = -1;
     for (int i = 0; i < all.size(); ++i)
     {
@@ -2412,8 +2449,7 @@ void ChatController::editAndResend(const QString &messageId, const QString &newT
     }
     if (idx < 0)
         return;
-    m_store->deleteMessagesFrom(m_convId, all[idx].createdAt);
-    openConversation(m_convId);
+    dropMessagesFrom(idx);
     m_composer = newText;
     emit composerTextChanged();
     send();
@@ -2609,7 +2645,12 @@ void ChatController::onCompactCompleted(const QString &text)
     sum.conversationId = m_convId;
     sum.role = QStringLiteral("system");
     sum.content = Compact::storedSummaryBody(text);
-    sum.createdAt = nowMs();
+    // The store orders by created_at, so the summary must sort ahead of the turns
+    // kept after it: give it the place the history it replaces started at.
+    qint64 at = m_pendingPlan.summarized.isEmpty() ? 0 : m_pendingPlan.summarized.first().createdAt;
+    if (at <= 0 && !m_pendingPlan.tail.isEmpty())
+        at = m_pendingPlan.tail.first().createdAt - 1;
+    sum.createdAt = at > 0 ? at : nowMs();
     persistMessage(sum);
 
     QVector<ChatMessage> next;

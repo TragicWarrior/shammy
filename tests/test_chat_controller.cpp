@@ -1,0 +1,589 @@
+#include "controllers/ChatController.h"
+#include "controllers/McpController.h"
+#include "controllers/ProjectController.h"
+#include "controllers/SettingsController.h"
+#include "mcp/McpHost.h"
+#include "openai/OpenAiClient.h"
+#include "persist/Store.h"
+
+#include <QElapsedTimer>
+#include <QFile>
+#include <QHostAddress>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QPointer>
+#include <QSettings>
+#include <QStandardPaths>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QTemporaryDir>
+#include <QtTest>
+#include <functional>
+#include <memory>
+
+// End-to-end checks of ChatController against a fake OpenAI-compatible server:
+// regenerate/edit (private and saved chats), compaction, and tool results that
+// arrive after their generation has ended.
+
+namespace
+{
+
+class FakeOpenAi : public QObject
+{
+public:
+    enum Kind
+    {
+        Text,
+        ToolCall,
+        Hold
+    };
+    struct Reply
+    {
+        Kind kind = Text;
+        QString text;
+        QString tool;
+    };
+    using Handler = std::function<Reply(int index, const QJsonObject &body)>;
+
+    static Reply text(const QString &t) { return {Text, t, {}}; }
+    static Reply toolCall(const QString &name) { return {ToolCall, {}, name}; }
+    static Reply hold() { return {Hold, {}, {}}; }
+
+    explicit FakeOpenAi(Handler h)
+        : m_handler(std::move(h))
+    {
+        connect(&m_server, &QTcpServer::newConnection, this, [this]() { accept(); });
+    }
+
+    bool listen() { return m_server.listen(QHostAddress::LocalHost, 0); }
+    QString baseUrl() const
+    {
+        return QStringLiteral("http://127.0.0.1:%1/v1").arg(m_server.serverPort());
+    }
+
+    // Bodies of every chat/completions request, in arrival order.
+    QList<QJsonObject> requests;
+
+    void releaseHeld(const QString &t)
+    {
+        const auto held = m_held;
+        m_held.clear();
+        for (const Held &h : held)
+        {
+            if (h.sock)
+                respond(h.sock, h.stream, text(t));
+        }
+    }
+
+private:
+    struct Held
+    {
+        QPointer<QTcpSocket> sock;
+        bool stream = true;
+    };
+
+    void accept()
+    {
+        while (QTcpSocket *s = m_server.nextPendingConnection())
+        {
+            s->setParent(this);
+            connect(s, &QTcpSocket::readyRead, this, [this, s]() { onData(s); });
+            connect(s, &QTcpSocket::disconnected, this, [this, s]()
+            {
+                m_buf.remove(s);
+                for (int i = m_held.size() - 1; i >= 0; --i)
+                {
+                    if (m_held.at(i).sock == s)
+                        m_held.removeAt(i);
+                }
+                s->deleteLater();
+            });
+        }
+    }
+
+    void onData(QTcpSocket *s)
+    {
+        QByteArray &buf = m_buf[s];
+        buf += s->readAll();
+        const int headEnd = buf.indexOf("\r\n\r\n");
+        if (headEnd < 0)
+            return;
+        const QByteArray head = buf.left(headEnd);
+        int len = 0;
+        const auto m = QRegularExpression(QStringLiteral("content-length:\\s*(\\d+)"),
+                                          QRegularExpression::CaseInsensitiveOption)
+                           .match(QString::fromLatin1(head));
+        if (m.hasMatch())
+            len = m.captured(1).toInt();
+        if (buf.size() < headEnd + 4 + len)
+            return;
+        const QByteArray body = buf.mid(headEnd + 4, len);
+        const QByteArray requestLine = head.left(head.indexOf("\r\n"));
+        buf.clear();
+        handle(s, requestLine, body);
+    }
+
+    void handle(QTcpSocket *s, const QByteArray &requestLine, const QByteArray &body)
+    {
+        if (requestLine.startsWith("GET") && requestLine.contains("/models"))
+        {
+            send(s, QStringLiteral("application/json"),
+                 QStringLiteral("{\"object\":\"list\",\"data\":[{\"id\":\"test-model\"}]}").toUtf8());
+            return;
+        }
+        if (!requestLine.contains("/chat/completions"))
+        {
+            s->write("HTTP/1.1 404 Not Found\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+            s->disconnectFromHost();
+            return;
+        }
+        const QJsonObject o = QJsonDocument::fromJson(body).object();
+        const int index = requests.size();
+        requests.append(o);
+        const Reply r = m_handler(index, o);
+        const bool stream = o.value(QStringLiteral("stream")).toBool(true);
+        if (r.kind == Hold)
+        {
+            m_held.append({s, stream});
+            return;
+        }
+        respond(s, stream, r);
+    }
+
+    static QByteArray sse(const QJsonObject &o)
+    {
+        return "data: " + QJsonDocument(o).toJson(QJsonDocument::Compact) + "\n\n";
+    }
+
+    void respond(QTcpSocket *s, bool stream, const Reply &r)
+    {
+        if (!stream)
+        {
+            const QJsonObject msg{{QStringLiteral("role"), QStringLiteral("assistant")},
+                                  {QStringLiteral("content"), r.text}};
+            const QJsonObject o{
+                {QStringLiteral("choices"), QJsonArray{QJsonObject{{QStringLiteral("message"), msg}}}}};
+            send(s, QStringLiteral("application/json"), QJsonDocument(o).toJson(QJsonDocument::Compact));
+            return;
+        }
+        QByteArray out;
+        QString finish = QStringLiteral("stop");
+        if (r.kind == ToolCall)
+        {
+            const QJsonObject fn{{QStringLiteral("name"), r.tool}, {QStringLiteral("arguments"), QStringLiteral("{}")}};
+            const QJsonObject tc{{QStringLiteral("index"), 0},
+                                 {QStringLiteral("id"), QStringLiteral("call_1")},
+                                 {QStringLiteral("type"), QStringLiteral("function")},
+                                 {QStringLiteral("function"), fn}};
+            out += sse({{QStringLiteral("choices"),
+                         QJsonArray{QJsonObject{{QStringLiteral("delta"),
+                                                 QJsonObject{{QStringLiteral("tool_calls"), QJsonArray{tc}}}}}}}});
+            finish = QStringLiteral("tool_calls");
+        }
+        else
+        {
+            out += sse({{QStringLiteral("choices"),
+                         QJsonArray{QJsonObject{{QStringLiteral("delta"),
+                                                 QJsonObject{{QStringLiteral("content"), r.text}}}}}}});
+        }
+        out += sse({{QStringLiteral("choices"),
+                     QJsonArray{QJsonObject{{QStringLiteral("delta"), QJsonObject{}},
+                                            {QStringLiteral("finish_reason"), finish}}}}});
+        out += "data: [DONE]\n\n";
+        send(s, QStringLiteral("text/event-stream"), out, false);
+    }
+
+    void send(QTcpSocket *s, const QString &type, const QByteArray &body, bool withLength = true)
+    {
+        QByteArray head = "HTTP/1.1 200 OK\r\nContent-Type: " + type.toUtf8() + "\r\nConnection: close\r\n";
+        if (withLength)
+            head += "Content-Length: " + QByteArray::number(body.size()) + "\r\n";
+        s->write(head + "\r\n" + body);
+        s->flush();
+        s->disconnectFromHost();
+    }
+
+    QTcpServer m_server;
+    Handler m_handler;
+    QHash<QTcpSocket *, QByteArray> m_buf;
+    QList<Held> m_held;
+};
+
+template <class Pred>
+bool waitFor(Pred pred, int ms = 8000)
+{
+    QElapsedTimer t;
+    t.start();
+    while (!pred())
+    {
+        if (t.elapsed() > ms)
+            return false;
+        QTest::qWait(10);
+    }
+    return true;
+}
+
+// Everything a ChatController needs, wired to a fake backend and (optionally) a
+// fake MCP server that exposes one tool, "slow". `mcpTail` is the shell run once
+// that tool is called; $GO is a file path the test can create to signal it.
+struct Fixture
+{
+    QTemporaryDir dir;
+    FakeOpenAi ai;
+    Store store;
+    OpenAiClient client;
+    McpHost host;
+    std::unique_ptr<McpController> mcp;
+    std::unique_ptr<SettingsController> settings;
+    std::unique_ptr<ProjectController> projects;
+    std::unique_ptr<ChatController> chat;
+    QString goFile;
+    bool ok = false;
+
+    explicit Fixture(FakeOpenAi::Handler handler, const QString &mcpTail = {})
+        : ai(std::move(handler))
+    {
+        if (!dir.isValid() || !ai.listen() || !store.open(dir.filePath(QStringLiteral("t.db"))))
+            return;
+        goFile = dir.filePath(QStringLiteral("go"));
+
+        QList<Backend> backends = store.backends();
+        if (backends.size() < 2)
+            return;
+        backends[0].name = QStringLiteral("Fake");
+        backends[0].baseUrl = ai.baseUrl();
+        backends[1].enabled = false;
+        store.upsertBackend(backends[0]);
+        store.upsertBackend(backends[1]);
+        store.setSetting(QStringLiteral("current_backend"), backends[0].id);
+
+        host.setConfigPath(dir.filePath(QStringLiteral("mcp.json")));
+        if (!mcpTail.isEmpty())
+        {
+            static const QString head = QStringLiteral(
+                "read init; printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}'; "
+                "read note; read list; "
+                "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"name\":\"slow\"}]}}'; "
+                "read call; ");
+            McpServerConfig c;
+            c.name = QStringLiteral("fake");
+            c.command = QStringLiteral("/bin/sh");
+            c.args = {QStringLiteral("-c"), head + mcpTail};
+            c.env.insert(QStringLiteral("GO"), goFile);
+            host.replaceConfigs({c});
+            if (!waitFor([this]() { return host.connectedCount() == 1; }))
+                return;
+            store.allowAlways(QStringLiteral("fake"), QStringLiteral("slow"));
+        }
+
+        mcp = std::make_unique<McpController>(&host, &store);
+        settings = std::make_unique<SettingsController>(&store, &client);
+        if (!waitFor([this]() { return !settings->loadingModels() && !settings->currentModel().isEmpty(); }))
+            return;
+        projects = std::make_unique<ProjectController>(&store);
+        chat = std::make_unique<ChatController>(&store, &client, mcp.get(), projects.get(), settings.get());
+        ok = true;
+    }
+
+    ~Fixture()
+    {
+        chat.reset();
+        host.stopAll();
+    }
+
+    bool say(const QString &text)
+    {
+        chat->setComposerText(text);
+        chat->send();
+        return waitFor([this]() { return !chat->streaming(); });
+    }
+
+    QStringList roles() const
+    {
+        QStringList out;
+        for (const ChatMessage &m : chat->messages()->all())
+            out << m.role;
+        return out;
+    }
+};
+
+QStringList userTexts(const QJsonObject &request)
+{
+    QStringList out;
+    for (const QJsonValue &v : request.value(QStringLiteral("messages")).toArray())
+    {
+        const QJsonObject m = v.toObject();
+        if (m.value(QStringLiteral("role")).toString() == QLatin1String("user"))
+            out << m.value(QStringLiteral("content")).toString();
+    }
+    return out;
+}
+
+QString systemText(const QJsonObject &request)
+{
+    const QJsonArray msgs = request.value(QStringLiteral("messages")).toArray();
+    return msgs.isEmpty() ? QString() : msgs.at(0).toObject().value(QStringLiteral("content")).toString();
+}
+
+const auto numbered = [](int i, const QJsonObject &) { return FakeOpenAi::text(QStringLiteral("reply %1").arg(i + 1)); };
+
+} // namespace
+
+class TestChatController : public QObject
+{
+    Q_OBJECT
+    QTemporaryDir m_settingsDir;
+
+private slots:
+    void initTestCase()
+    {
+        if (!QFile::exists(QStringLiteral("/bin/sh")))
+            QSKIP("needs /bin/sh to fake an MCP server");
+        {
+            // Some build sandboxes have no loopback interface.
+            QTcpServer probe;
+            if (!probe.listen(QHostAddress::LocalHost, 0))
+                QSKIP("needs loopback networking to fake an OpenAI server");
+        }
+        // Keep QSettings and app data away from the real profile.
+        QVERIFY(m_settingsDir.isValid());
+        QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, m_settingsDir.path());
+        QStandardPaths::setTestModeEnabled(true);
+        QCoreApplication::setOrganizationName(QStringLiteral("shammy-test"));
+        QCoreApplication::setApplicationName(QStringLiteral("shammy-test"));
+    }
+
+    // -- B1: Regenerate / Edit in a private chat -------------------------------
+
+    void privateRegenerateKeepsTheConversation()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        f.chat->newPrivateChat();
+        QVERIFY(f.say(QStringLiteral("hello there")));
+        QCOMPARE(f.roles(), (QStringList{"user", "assistant"}));
+
+        f.chat->regenerate();
+        QVERIFY(waitFor([&]() { return !f.chat->streaming() && f.ai.requests.size() == 2; }));
+
+        // The new request still carries the user's message.
+        QCOMPARE(userTexts(f.ai.requests.at(1)), QStringList{QStringLiteral("hello there")});
+        QCOMPARE(f.roles(), (QStringList{"user", "assistant"}));
+        QCOMPARE(f.chat->messages()->all().last().content, QStringLiteral("reply 2"));
+        // ... and the chat is still private: nothing was written to history.
+        QVERIFY(f.chat->privateSession());
+        QVERIFY(f.store.conversations().isEmpty());
+        QVERIFY(f.store.messages(f.chat->conversationId()).isEmpty());
+    }
+
+    void privateEditKeepsEarlierTurns()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        f.chat->newPrivateChat();
+        QVERIFY(f.say(QStringLiteral("first question")));
+        QVERIFY(f.say(QStringLiteral("second question")));
+        QCOMPARE(f.roles(), (QStringList{"user", "assistant", "user", "assistant"}));
+
+        const QString secondId = f.chat->messages()->all().at(2).id;
+        f.chat->editAndResend(secondId, QStringLiteral("edited question"));
+        QVERIFY(waitFor([&]() { return !f.chat->streaming() && f.ai.requests.size() == 3; }));
+
+        const QJsonObject req = f.ai.requests.at(2);
+        QCOMPARE(userTexts(req), (QStringList{"first question", "edited question"}));
+        QCOMPARE(f.roles(), (QStringList{"user", "assistant", "user", "assistant"}));
+        QCOMPARE(f.chat->messages()->all().at(2).content, QStringLiteral("edited question"));
+        QCOMPARE(f.chat->messages()->all().at(3).content, QStringLiteral("reply 3"));
+        QVERIFY(f.chat->privateSession());
+        QVERIFY(f.store.conversations().isEmpty());
+    }
+
+    void privateEditOfFirstMessageStartsOver()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        f.chat->newPrivateChat();
+        QVERIFY(f.say(QStringLiteral("typo")));
+        f.chat->editAndResend(f.chat->messages()->all().at(0).id, QStringLiteral("fixed"));
+        QVERIFY(waitFor([&]() { return !f.chat->streaming() && f.ai.requests.size() == 2; }));
+        QCOMPARE(userTexts(f.ai.requests.at(1)), QStringList{QStringLiteral("fixed")});
+        QCOMPARE(f.roles(), (QStringList{"user", "assistant"}));
+        QVERIFY(f.chat->privateSession());
+    }
+
+    // -- Saved chats: same operations, deleted by id ----------------------------
+
+    void savedRegenerateAndEdit()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("first question")));
+        QVERIFY(f.say(QStringLiteral("second question")));
+        const QString convId = f.chat->conversationId();
+        QCOMPARE(f.store.messages(convId).size(), 4);
+
+        f.chat->regenerate();
+        QVERIFY(waitFor([&]() { return !f.chat->streaming() && f.ai.requests.size() == 3; }));
+        QCOMPARE(userTexts(f.ai.requests.at(2)), (QStringList{"first question", "second question"}));
+        auto stored = f.store.messages(convId);
+        QCOMPARE(stored.size(), 4);
+        QCOMPARE(stored.last().content, QStringLiteral("reply 3"));
+
+        const QString secondId = stored.at(2).id;
+        f.chat->editAndResend(secondId, QStringLiteral("edited"));
+        QVERIFY(waitFor([&]() { return !f.chat->streaming() && f.ai.requests.size() == 4; }));
+        QCOMPARE(userTexts(f.ai.requests.at(3)), (QStringList{"first question", "edited"}));
+        stored = f.store.messages(convId);
+        QCOMPARE(stored.size(), 4);
+        QCOMPARE(stored.at(2).content, QStringLiteral("edited"));
+        QCOMPARE(stored.at(3).content, QStringLiteral("reply 4"));
+    }
+
+    // -- B2: a compaction summary must survive Regenerate / Edit ----------------
+
+    void compactionSummarySortsBeforeTheKeptTurns()
+    {
+        Fixture f([](int i, const QJsonObject &body)
+                  {
+                      if (!body.value(QStringLiteral("stream")).toBool(true))
+                          return FakeOpenAi::text(QStringLiteral("SUMMARY-OF-EARLIER"));
+                      return FakeOpenAi::text(QStringLiteral("reply %1").arg(i + 1));
+                  });
+        QVERIFY(f.ok);
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("first question")));
+        QVERIFY(f.say(QStringLiteral("second question")));
+        const QString convId = f.chat->conversationId();
+
+        f.chat->compact();
+        QVERIFY(waitFor([&]() { return f.chat->compactStatus().startsWith(QLatin1String("Compacted")); }));
+
+        const auto stored = f.store.messages(convId);
+        QCOMPARE(stored.size(), 3);
+        QCOMPARE(stored.at(0).role, QStringLiteral("system"));
+        QVERIFY(stored.at(0).content.contains(QLatin1String("SUMMARY-OF-EARLIER")));
+        QCOMPARE(stored.at(1).role, QStringLiteral("user"));
+        QVERIFY(stored.at(0).createdAt < stored.at(1).createdAt);
+    }
+
+    void compactionSummarySurvivesRegenerateAndEdit()
+    {
+        Fixture f([](int i, const QJsonObject &body)
+                  {
+                      if (!body.value(QStringLiteral("stream")).toBool(true))
+                          return FakeOpenAi::text(QStringLiteral("SUMMARY-OF-EARLIER"));
+                      return FakeOpenAi::text(QStringLiteral("reply %1").arg(i + 1));
+                  });
+        QVERIFY(f.ok);
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("first question")));
+        QVERIFY(f.say(QStringLiteral("second question")));
+        const QString convId = f.chat->conversationId();
+        f.chat->compact();
+        QVERIFY(waitFor([&]() { return f.chat->compactStatus().startsWith(QLatin1String("Compacted")); }));
+        QCOMPARE(f.ai.requests.size(), 3); // two turns + the summary request
+
+        f.chat->regenerate();
+        QVERIFY(waitFor([&]() { return !f.chat->streaming() && f.ai.requests.size() == 4; }));
+        QVERIFY(systemText(f.ai.requests.at(3)).contains(QLatin1String("SUMMARY-OF-EARLIER")));
+        QCOMPARE(userTexts(f.ai.requests.at(3)), QStringList{QStringLiteral("second question")});
+        auto stored = f.store.messages(convId);
+        QCOMPARE(stored.size(), 3);
+        QCOMPARE(stored.at(0).role, QStringLiteral("system"));
+        QCOMPARE(stored.at(2).content, QStringLiteral("reply 4"));
+
+        f.chat->editAndResend(stored.at(1).id, QStringLiteral("edited question"));
+        QVERIFY(waitFor([&]() { return !f.chat->streaming() && f.ai.requests.size() == 5; }));
+        QVERIFY(systemText(f.ai.requests.at(4)).contains(QLatin1String("SUMMARY-OF-EARLIER")));
+        QCOMPARE(userTexts(f.ai.requests.at(4)), QStringList{QStringLiteral("edited question")});
+        stored = f.store.messages(convId);
+        QCOMPARE(stored.size(), 3);
+        QCOMPARE(stored.at(0).role, QStringLiteral("system"));
+        QCOMPARE(stored.at(1).content, QStringLiteral("edited question"));
+    }
+
+    // -- B3 (in the chat): a dying MCP server must not hang the tool round ------
+
+    void toolServerExitingMidCallDoesNotHangTheChat()
+    {
+        Fixture f([](int i, const QJsonObject &)
+                  {
+                      if (i == 0)
+                          return FakeOpenAi::toolCall(QStringLiteral("slow"));
+                      return FakeOpenAi::text(QStringLiteral("recovered"));
+                  },
+                  QStringLiteral("exit 0"));
+        QVERIFY(f.ok);
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("use the tool")));
+
+        QCOMPARE(f.ai.requests.size(), 2);
+        QVERIFY(f.roles().contains(QStringLiteral("tool")));
+        QString toolText;
+        for (const ChatMessage &m : f.chat->messages()->all())
+        {
+            if (m.role == QLatin1String("tool"))
+                toolText = m.content;
+        }
+        QVERIFY2(toolText.contains(QLatin1String("exited")), qPrintable(toolText));
+        QCOMPARE(f.chat->messages()->all().last().content, QStringLiteral("recovered"));
+    }
+
+    // -- B4: a tool result that outlives its generation is dropped --------------
+
+    void staleToolResultDoesNotDisturbTheNextReply()
+    {
+        // Request 0 asks for the slow tool; request 1 (the next message) is held
+        // open; request 2 must never happen.
+        Fixture f([](int i, const QJsonObject &)
+                  {
+                      if (i == 0)
+                          return FakeOpenAi::toolCall(QStringLiteral("slow"));
+                      if (i == 1)
+                          return FakeOpenAi::hold();
+                      return FakeOpenAi::text(QStringLiteral("unexpected"));
+                  },
+                  // Wait for the test's signal, then reply.
+                  QStringLiteral("while [ ! -f \"$GO\" ]; do sleep 0.02; done; "
+                                 "id=$(printf '%s' \"$call\" | sed 's/.*\"id\":\\([0-9]*\\).*/\\1/'); "
+                                 "printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"LATE\"}]}}\\n' \"$id\"; "
+                                 "exec sleep 30"));
+        QVERIFY(f.ok);
+        f.chat->newChat();
+        f.chat->setComposerText(QStringLiteral("use the tool"));
+        f.chat->send();
+        // The tool call has been dispatched once the assistant message carries it.
+        QVERIFY(waitFor([&]() { return !f.chat->messages()->all().isEmpty()
+                                    && !f.chat->messages()->all().last().toolCallsJson.isEmpty(); }));
+
+        f.chat->stop();
+        QVERIFY(!f.chat->streaming());
+
+        f.chat->setComposerText(QStringLiteral("second message"));
+        f.chat->send();
+        QVERIFY(waitFor([&]() { return f.ai.requests.size() == 2; }));
+        QVERIFY(f.chat->streaming());
+
+        // Now the abandoned tool call finally answers.
+        QFile go(f.goFile);
+        QVERIFY(go.open(QIODevice::WriteOnly));
+        go.close();
+        QTest::qWait(700);
+
+        // It must not have been folded into the new reply or restarted the stream.
+        QCOMPARE(f.ai.requests.size(), 2);
+        QVERIFY(f.chat->streaming());
+        QVERIFY(!f.roles().contains(QStringLiteral("tool")));
+
+        f.ai.releaseHeld(QStringLiteral("final answer"));
+        QVERIFY(waitFor([&]() { return !f.chat->streaming(); }));
+        QCOMPARE(f.ai.requests.size(), 2);
+        QCOMPARE(f.chat->messages()->all().last().content, QStringLiteral("final answer"));
+        QVERIFY(!f.roles().contains(QStringLiteral("tool")));
+    }
+};
+
+QTEST_GUILESS_MAIN(TestChatController)
+#include "test_chat_controller.moc"
