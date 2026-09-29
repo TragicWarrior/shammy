@@ -1,5 +1,6 @@
 #include "artifacts/Attach.h"
 #include "artifacts/DocumentExtract.h"
+#include "artifacts/PdfExtract.h"
 #include "artifacts/SpreadsheetExtract.h"
 
 #include <QFile>
@@ -18,7 +19,6 @@ bool isKnownBinaryMime(const QString &mime)
         return true;
     }
     static const QStringList exact = {
-        QStringLiteral("application/pdf"),
         QStringLiteral("application/zip"),
         QStringLiteral("application/gzip"),
         QStringLiteral("application/x-gzip"),
@@ -106,6 +106,10 @@ Kind kindForMime(const QString &mime, const QString &suffix, const QByteArray &h
     {
         return Kind::Document;
     }
+    if (suf == QLatin1String("pdf") || mime == QLatin1String("application/pdf"))
+    {
+        return Kind::Pdf;
+    }
     if (mime.startsWith(QLatin1String("image/")))
     {
         return Kind::Image;
@@ -143,6 +147,10 @@ Kind kindForPath(const QString &path)
     if (DocumentExtract::isDocumentPath(path))
     {
         return Kind::Document;
+    }
+    if (PdfExtract::isPdfPath(path))
+    {
+        return Kind::Pdf;
     }
     const QFileInfo fi(path);
     const QString mime = QMimeDatabase().mimeTypeForFile(fi).name();

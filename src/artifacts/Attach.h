@@ -10,6 +10,7 @@ enum class Kind
     Image,
     Spreadsheet,
     Document,
+    Pdf,
     Text,
     Unsupported
 };

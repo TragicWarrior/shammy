@@ -41,6 +41,8 @@ class SettingsController : public QObject
     Q_PROPERTY(bool includeLocalTime READ includeLocalTime WRITE setIncludeLocalTime NOTIFY includeLocalTimeChanged)
     Q_PROPERTY(QString officeBinaryPath READ officeBinaryPath WRITE setOfficeBinaryPath NOTIFY officeBinaryPathChanged)
     Q_PROPERTY(QString officeDetectedPath READ officeDetectedPath CONSTANT)
+    Q_PROPERTY(QString pdftotextBinaryPath READ pdftotextBinaryPath WRITE setPdftotextBinaryPath NOTIFY pdftotextBinaryPathChanged)
+    Q_PROPERTY(QString pdftotextDetectedPath READ pdftotextDetectedPath CONSTANT)
     Q_PROPERTY(int compactionThreshold READ compactionThreshold WRITE setCompactionThreshold NOTIFY compactionThresholdChanged)
     Q_PROPERTY(bool hasWebEngine READ hasWebEngine CONSTANT)
     Q_PROPERTY(QString modelsError READ modelsError NOTIFY modelsErrorChanged)
@@ -95,6 +97,8 @@ public:
     void setDefaultThinkingMode(const QString &mode);
     QString reasoningEffort() const;
     int contextSize() const;
+    // The context window configured for a specific backend and model, in tokens.
+    int contextSizeFor(const QString &backendId, const QString &model) const;
     void setContextSize(int n);
     QString contextSizeLabel() const;
     Q_INVOKABLE void setContextSizeFromText(const QString &text);
@@ -126,6 +130,11 @@ public:
     void setOfficeBinaryPath(const QString &p);
     QString officeDetectedPath() const;
     Q_INVOKABLE QString resolveOfficeBinary(const QString &overridePath) const;
+    // pdftotext, which reads PDFs: PDFs are supported only while one is found.
+    QString pdftotextBinaryPath() const { return m_pdftotextBinaryPath; }
+    void setPdftotextBinaryPath(const QString &p);
+    QString pdftotextDetectedPath() const;
+    Q_INVOKABLE QString resolvePdftotext(const QString &overridePath) const;
     int compactionThreshold() const { return m_compactionThreshold; }
     void setCompactionThreshold(int percent);
     bool hasWebEngine() const;
@@ -198,6 +207,7 @@ signals:
     void enableArtifactsChanged();
     void includeLocalTimeChanged();
     void officeBinaryPathChanged();
+    void pdftotextBinaryPathChanged();
     void compactionThresholdChanged();
     void modelsErrorChanged();
     void loadingModelsChanged();
@@ -212,7 +222,6 @@ private:
     QString thinkDefaultKey() const;
     QString contextKey() const;
     QString contextKeyFor(const QString &backendId, const QString &model) const;
-    int contextSizeFor(const QString &backendId, const QString &model) const;
     QString capUserKey(const QString &feat) const;
     QString capUserKeyFor(const QString &backendId, const QString &model, const QString &feat) const;
     QString capHintKey(const QString &backendId, const QString &model, const QString &feat) const;
@@ -250,6 +259,7 @@ private:
     bool m_enableArtifacts = true;
     bool m_includeLocalTime = true;
     QString m_officeBinaryPath;
+    QString m_pdftotextBinaryPath;
     int m_compactionThreshold = 80;
     QString m_modelsError;
     bool m_loadingModels = false;

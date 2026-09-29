@@ -15,7 +15,7 @@ C++20, CMake, Qt 6.4+ Quick. MIT licensed.
 - Artifacts: tagged blocks plus large HTML/SVG/JS fences, versioned side pane
 - Local MCP over stdio (Claude Desktop `mcpServers` schema), tool loop, permission prompts
 - Markdown bubbles, code copy, regenerate / edit-resend, stop
-- Text and image attachments (vision as `image_url` data URLs)
+- Text and image attachments (vision as `image_url` data URLs), plus Word, spreadsheet and PDF files when the tools to read them are installed
 - Thinking/reasoning deltas when the backend streams them
 - Dark / light theme
 
@@ -109,6 +109,31 @@ auto-detect misses your install. Interactive pages (JavaScript
 dashboards) flatten to a static document. Install with
 `sudo apt-get install libreoffice`. The artifact in Shammy stays HTML
 or markdown; Word is a download, not a second source of truth.
+
+## Project files
+
+Files added to a project are preloaded, as text, into every chat in it.
+
+- **What can be added:** text files (source, markdown, CSV, logs...) are stored
+  as they are. Word and OpenDocument files become `<name>.docx.txt`, each
+  sheet of a spreadsheet becomes `<name>-<sheet>.csv`, and a PDF becomes
+  `<name>.pdf.txt` (layout kept, so tables stay aligned). These use optional
+  tools, found automatically or set in Settings → Advanced: LibreOffice or
+  OpenOffice for Word and spreadsheets, and `pdftotext` (`poppler-utils`) for
+  PDFs. A file type is supported only while its tool is found; otherwise the
+  file is refused on the spot, with what to install. Conversion runs in the
+  background. Images, archives and other non-text files are refused with a
+  reason, rather than stored and pasted into the prompt as garbage. A scanned
+  PDF has no text to read and is reported as needing OCR first.
+- **How much is sent:** instructions and files together may use at most 40% of
+  the model's context window (about 4 bytes to a token), never more than 256 KB,
+  so the prompt always leaves room to talk. The window used is that of the model
+  that is answering, so the same project sends less to a 16K model than to a
+  256K one. No single file may take more than half of that budget. What does not
+  fit is cut (or, if the budget is used up, left out and named); everything
+  stays saved, and the usage bar in the project shows when something is cut.
+- **Removing:** removing a file, or deleting a project, deletes its files from
+  disk too. Only Shammy's own project folder is ever touched.
 
 ## Web tools
 

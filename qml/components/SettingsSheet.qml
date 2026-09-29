@@ -35,6 +35,7 @@ Popup {
         property bool enableArtifacts: true
         property bool includeLocalTime: true
         property string officeBinaryPath: ""
+        property string pdftotextBinaryPath: ""
         property int compactionThreshold: 80
         property bool webSearchEnabled: false
         property string webSearchProvider: "brave"
@@ -58,6 +59,9 @@ Popup {
         draft.officeBinaryPath = settings.officeBinaryPath
         if (officePathField)
             officePathField.text = draft.officeBinaryPath
+        draft.pdftotextBinaryPath = settings.pdftotextBinaryPath
+        if (pdftotextPathField)
+            pdftotextPathField.text = draft.pdftotextBinaryPath
         draft.compactionThreshold = settings.compactionThreshold
         draft.webSearchEnabled = settings.webSearchEnabled
         draft.webSearchProvider = settings.webSearchProvider
@@ -87,6 +91,7 @@ Popup {
         settings.enableArtifacts = draft.enableArtifacts
         settings.includeLocalTime = draft.includeLocalTime
         settings.officeBinaryPath = draft.officeBinaryPath
+        settings.pdftotextBinaryPath = draft.pdftotextBinaryPath
         settings.compactionThreshold = draft.compactionThreshold
         settings.webSearchEnabled = draft.webSearchEnabled
         settings.webSearchProvider = draft.webSearchProvider
@@ -136,6 +141,23 @@ Popup {
             if (officePathField)
                 officePathField.text = p
         }
+
+    FileDialog {
+        id: pdftotextDialog
+        fileMode: FileDialog.OpenFile
+        title: "pdftotext binary"
+        onAccepted: {
+            let p = selectedFile.toString()
+            if (p.indexOf("file://") === 0) {
+                p = decodeURIComponent(p.substring(7))
+                if (p.length >= 3 && p.charAt(0) === "/" && p.charAt(2) === ":")
+                    p = p.substring(1)
+            }
+            draft.pdftotextBinaryPath = p
+            if (pdftotextPathField)
+                pdftotextPathField.text = p
+        }
+    }
     }
 
     ColumnLayout {
@@ -1222,6 +1244,125 @@ Popup {
                                         return "Not found. Install LibreOffice or OpenOffice, or set the path to soffice."
                                     }
                                     color: officeCol.resolved.length ? Theme.muted : Theme.danger
+                                    font.pixelSize: 12
+                                    wrapMode: Text.Wrap
+                                    Layout.fillWidth: true
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 24
+                            Layout.rightMargin: 24
+                            radius: 12
+                            color: Theme.panel
+                            implicitHeight: pdfCol.height + 24
+                            ColumnLayout {
+                                id: pdfCol
+                                x: 16
+                                y: 12
+                                width: parent.width - 32
+                                spacing: 8
+                                readonly property string resolved: settings.resolvePdftotext(draft.pdftotextBinaryPath)
+                                readonly property bool hasOverride: draft.pdftotextBinaryPath.trim().length > 0
+                                readonly property bool autodetected: !hasOverride && resolved.length > 0
+                                readonly property bool customOk: hasOverride && resolved.length > 0
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    Text {
+                                        text: "PDF text (pdftotext)"
+                                        color: Theme.text
+                                        font.pixelSize: 14
+                                    }
+                                    Rectangle {
+                                        visible: pdfCol.autodetected
+                                        width: pdfAutoLab.implicitWidth + 16
+                                        height: 20
+                                        radius: 10
+                                        color: Theme.text
+                                        Text {
+                                            id: pdfAutoLab
+                                            anchors.centerIn: parent
+                                            text: "Autodetected"
+                                            color: Theme.bg
+                                            font.pixelSize: 11
+                                            font.weight: Font.DemiBold
+                                        }
+                                    }
+                                    Rectangle {
+                                        visible: pdfCol.customOk
+                                        width: pdfCustomLab.implicitWidth + 16
+                                        height: 20
+                                        radius: 10
+                                        color: "transparent"
+                                        border.color: Theme.border
+                                        Text {
+                                            id: pdfCustomLab
+                                            anchors.centerIn: parent
+                                            text: "Custom"
+                                            color: Theme.muted
+                                            font.pixelSize: 11
+                                            font.weight: Font.DemiBold
+                                        }
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                }
+                                Text {
+                                    text: "Used to read PDFs attached to chats and added to projects. PDFs are supported only while it is found. Leave blank to use a detected install."
+                                    color: Theme.muted
+                                    font.pixelSize: 12
+                                    wrapMode: Text.Wrap
+                                    Layout.fillWidth: true
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    TextField {
+                                        id: pdftotextPathField
+                                        Layout.fillWidth: true
+                                        text: draft.pdftotextBinaryPath
+                                        placeholderText: settings.pdftotextDetectedPath.length
+                                                         ? settings.pdftotextDetectedPath
+                                                         : "Path to pdftotext"
+                                        color: Theme.text
+                                        onTextChanged: draft.pdftotextBinaryPath = text
+                                        background: Rectangle { color: Theme.bg; radius: 8; border.color: Theme.border }
+                                    }
+                                    Rectangle {
+                                        width: pdfBrowseLab.implicitWidth + 24
+                                        height: 32
+                                        radius: 8
+                                        color: pdfBrowseHover.containsMouse ? Theme.hover : "transparent"
+                                        border.color: Theme.border
+                                        Text {
+                                            id: pdfBrowseLab
+                                            anchors.centerIn: parent
+                                            text: "Browse"
+                                            color: Theme.text
+                                            font.pixelSize: 13
+                                        }
+                                        MouseArea {
+                                            id: pdfBrowseHover
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: pdftotextDialog.open()
+                                        }
+                                    }
+                                }
+                                Text {
+                                    text: {
+                                        if (pdfCol.autodetected)
+                                            return "Autodetected — PDFs will be read with " + pdfCol.resolved
+                                        if (pdfCol.customOk)
+                                            return "PDFs will be read with " + pdfCol.resolved
+                                        if (draft.pdftotextBinaryPath.trim().length)
+                                            return "That path is not a usable pdftotext binary. PDFs can't be read until it is fixed."
+                                        return "Not found, so PDFs can't be attached or added to projects. Install poppler-utils (Debian/Ubuntu: sudo apt install poppler-utils), or set the path to pdftotext."
+                                    }
+                                    color: pdfCol.resolved.length ? Theme.muted : Theme.danger
                                     font.pixelSize: 12
                                     wrapMode: Text.Wrap
                                     Layout.fillWidth: true

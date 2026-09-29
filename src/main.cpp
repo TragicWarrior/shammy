@@ -149,6 +149,10 @@ int main(int argc, char *argv[])
 
     SettingsController settings(&store, &openai);
     ProjectController projects(&store);
+    // Project files are sized to the selected model's context window.
+    projects.setContextTokens(settings.contextSize());
+    QObject::connect(&settings, &SettingsController::contextSizeChanged, &projects,
+                     [&projects, &settings]() { projects.setContextTokens(settings.contextSize()); });
     ClaudeImporter claudeImport(&projects, &store, &settings);
     McpController mcp(&mcpHost, &store);
     ChatController chat(&store, &openai, &mcp, &projects, &settings);
