@@ -3,6 +3,7 @@
 #include "models/SimpleListModels.h"
 #include "openai/OpenAiClient.h"
 #include "persist/Store.h"
+#include "websearch/WebSearch.h"
 
 #include <QMap>
 #include <QObject>
@@ -54,6 +55,16 @@ class SettingsController : public QObject
     Q_PROPERTY(QString webSearchProvider READ webSearchProvider WRITE setWebSearchProvider NOTIFY webSearchChanged)
     Q_PROPERTY(QString webSearchApiKey READ webSearchApiKey WRITE setWebSearchApiKey NOTIFY webSearchChanged)
     Q_PROPERTY(bool webSearchReady READ webSearchReady NOTIFY webSearchChanged)
+    // Page fetches: how long with no data before giving up (Advanced), and the
+    // most time one fetch may take in total (Web search). Both in seconds.
+    Q_PROPERTY(int webFetchStallSeconds READ webFetchStallSeconds WRITE setWebFetchStallSeconds NOTIFY webFetchChanged)
+    Q_PROPERTY(int webFetchTimeoutSeconds READ webFetchTimeoutSeconds WRITE setWebFetchTimeoutSeconds NOTIFY webFetchChanged)
+    Q_PROPERTY(int webFetchStallMin READ webFetchStallMin CONSTANT)
+    Q_PROPERTY(int webFetchStallMax READ webFetchStallMax CONSTANT)
+    Q_PROPERTY(int webFetchStallDefault READ webFetchStallDefault CONSTANT)
+    Q_PROPERTY(int webFetchTimeoutMin READ webFetchTimeoutMin CONSTANT)
+    Q_PROPERTY(int webFetchTimeoutMax READ webFetchTimeoutMax CONSTANT)
+    Q_PROPERTY(int webFetchTimeoutDefault READ webFetchTimeoutDefault CONSTANT)
 public:
     SettingsController(Store *store, OpenAiClient *client, QObject *parent = nullptr);
 
@@ -147,6 +158,20 @@ public:
     void setWebSearchApiKey(const QString &k);
     bool webSearchReady() const;
 
+    int webFetchStallSeconds() const { return m_webFetchStallSeconds; }
+    void setWebFetchStallSeconds(int seconds);
+    int webFetchTimeoutSeconds() const { return m_webFetchTimeoutSeconds; }
+    void setWebFetchTimeoutSeconds(int seconds);
+    int webFetchStallMin() const { return WebFetchOptions::kMinStallSeconds; }
+    int webFetchStallMax() const { return WebFetchOptions::kMaxStallSeconds; }
+    int webFetchStallDefault() const { return WebFetchOptions::kDefaultStallSeconds; }
+    int webFetchTimeoutMin() const { return WebFetchOptions::kMinTotalSeconds; }
+    int webFetchTimeoutMax() const { return WebFetchOptions::kMaxTotalSeconds; }
+    int webFetchTimeoutDefault() const { return WebFetchOptions::kDefaultTotalSeconds; }
+    // The two limits as WebSearch::fetch wants them. The total is never shorter
+    // than the stall time, whatever was typed into either field.
+    WebFetchOptions webFetchOptions() const;
+
     Q_INVOKABLE void refreshModels();
     Q_INVOKABLE void saveBackend(const QString &id, const QString &name, const QString &url,
                                  const QString &apiKey);
@@ -178,6 +203,7 @@ signals:
     void loadingModelsChanged();
     void modelCapsChanged();
     void webSearchChanged();
+    void webFetchChanged();
 
 private:
     void reloadBackends();
@@ -233,4 +259,6 @@ private:
     bool m_webSearchEnabled = false;
     QString m_webSearchProvider = QStringLiteral("brave");
     QString m_webSearchApiKey;
+    int m_webFetchStallSeconds = WebFetchOptions::kDefaultStallSeconds;
+    int m_webFetchTimeoutSeconds = WebFetchOptions::kDefaultTotalSeconds;
 };

@@ -78,6 +78,8 @@ public:
                    QObject *parent = nullptr);
 
     MessageListModel *messages() { return &m_messages; }
+    // The page fetcher behind the web tools; exposed so tests can point it at a local server.
+    WebSearch *webSearch() { return &m_web; }
     ConversationListModel *conversations() { return &m_conversations; }
     ConversationListModel *favorites() { return &m_favorites; }
     ConversationListModel *projectConversations() { return &m_projectConversations; }

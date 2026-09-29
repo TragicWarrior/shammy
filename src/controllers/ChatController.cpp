@@ -1417,6 +1417,9 @@ void ChatController::endGeneration()
     m_pendingToolQueue = {};
     m_pendingToolI = 0;
     ++m_toolEpoch;
+    // Stop web requests still running for this generation instead of letting them
+    // download for nobody. (Their callbacks fire, but the epoch above drops them.)
+    m_web.cancelAll();
     m_toolRounds = 0;
     m_forceFinalWrite = false;
     m_finalWriteAttempts = 0;
@@ -2292,10 +2295,12 @@ void ChatController::executeOneTool()
         if (!host.isEmpty())
             activity = QStringLiteral("Fetching %1…").arg(host);
         setToolActivity(activity);
-        m_web.fetch(url, [deliver](const QString &text, const QString &error)
-        {
-            deliver(QStringLiteral("web_fetch"), error.isEmpty() ? text : error);
-        });
+        m_web.fetch(url,
+                    [deliver](const QString &text, const QString &error)
+                    {
+                        deliver(QStringLiteral("web_fetch"), error.isEmpty() ? text : error);
+                    },
+                    m_settings->webFetchOptions());
         return;
     }
     const McpTool tool = m_mcp->host()->findTool(name);

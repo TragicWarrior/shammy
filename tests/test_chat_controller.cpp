@@ -43,12 +43,16 @@ public:
         Kind kind = Text;
         QString text;
         QString tool;
+        QString args = QStringLiteral("{}");
     };
     using Handler = std::function<Reply(int index, const QJsonObject &body)>;
 
-    static Reply text(const QString &t) { return {Text, t, {}}; }
-    static Reply toolCall(const QString &name) { return {ToolCall, {}, name}; }
-    static Reply hold() { return {Hold, {}, {}}; }
+    static Reply text(const QString &t) { return {Text, t, {}, {}}; }
+    static Reply toolCall(const QString &name, const QString &args = QStringLiteral("{}"))
+    {
+        return {ToolCall, {}, name, args};
+    }
+    static Reply hold() { return {Hold, {}, {}, {}}; }
 
     explicit FakeOpenAi(Handler h)
         : m_handler(std::move(h))
@@ -171,7 +175,7 @@ private:
         QString finish = QStringLiteral("stop");
         if (r.kind == ToolCall)
         {
-            const QJsonObject fn{{QStringLiteral("name"), r.tool}, {QStringLiteral("arguments"), QStringLiteral("{}")}};
+            const QJsonObject fn{{QStringLiteral("name"), r.tool}, {QStringLiteral("arguments"), r.args}};
             const QJsonObject tc{{QStringLiteral("index"), 0},
                                  {QStringLiteral("id"), QStringLiteral("call_1")},
                                  {QStringLiteral("type"), QStringLiteral("function")},
@@ -208,6 +212,35 @@ private:
     Handler m_handler;
     QHash<QTcpSocket *, QByteArray> m_buf;
     QList<Held> m_held;
+};
+
+// Accepts connections and never answers, so a fetch against it stays in flight.
+class HoldServer : public QObject
+{
+public:
+    HoldServer()
+    {
+        connect(&m_server, &QTcpServer::newConnection, this, [this]()
+        {
+            while (QTcpSocket *s = m_server.nextPendingConnection())
+            {
+                s->setParent(this);
+                ++connections;
+                connect(s, &QTcpSocket::disconnected, this, [this, s]()
+                {
+                    ++disconnections;
+                    s->deleteLater();
+                });
+            }
+        });
+    }
+    bool listen() { return m_server.listen(QHostAddress::LocalHost, 0); }
+    quint16 port() const { return m_server.serverPort(); }
+    int connections = 0;
+    int disconnections = 0;
+
+private:
+    QTcpServer m_server;
 };
 
 template <class Pred>
@@ -352,6 +385,84 @@ private slots:
         QStandardPaths::setTestModeEnabled(true);
         QCoreApplication::setOrganizationName(QStringLiteral("shammy-test"));
         QCoreApplication::setApplicationName(QStringLiteral("shammy-test"));
+    }
+
+    // -- Web fetch limits (Settings) ---------------------------------------------
+
+    void webFetchLimitsAreClampedPersistedAndFeedTheFetchOptions()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        SettingsController &s = *f.settings;
+        // The QSettings file is shared by every test here, so put the defaults back.
+        struct Reset
+        {
+            SettingsController &s;
+            ~Reset()
+            {
+                s.setWebFetchStallSeconds(WebFetchOptions::kDefaultStallSeconds);
+                s.setWebFetchTimeoutSeconds(WebFetchOptions::kDefaultTotalSeconds);
+            }
+        } reset{s};
+
+        QCOMPARE(s.webFetchStallSeconds(), 30);
+        QCOMPARE(s.webFetchTimeoutSeconds(), 300);
+        QCOMPARE(s.webFetchStallDefault(), 30);
+        QCOMPARE(s.webFetchTimeoutDefault(), 300);
+
+        s.setWebFetchStallSeconds(1);
+        QCOMPARE(s.webFetchStallSeconds(), s.webFetchStallMin());
+        s.setWebFetchStallSeconds(999999);
+        QCOMPARE(s.webFetchStallSeconds(), s.webFetchStallMax());
+        s.setWebFetchTimeoutSeconds(1);
+        QCOMPARE(s.webFetchTimeoutSeconds(), s.webFetchTimeoutMin());
+        s.setWebFetchTimeoutSeconds(999999);
+        QCOMPARE(s.webFetchTimeoutSeconds(), s.webFetchTimeoutMax());
+
+        s.setWebFetchStallSeconds(45);
+        s.setWebFetchTimeoutSeconds(600);
+        WebFetchOptions o = s.webFetchOptions();
+        QCOMPARE(o.stallMs, 45000);
+        QCOMPARE(o.totalMs, 600000);
+        QCOMPARE(o.maxBytes, WebFetchOptions::kDefaultMaxBytes);
+
+        // Whatever is typed into either field, the total is never shorter than the stall time.
+        s.setWebFetchStallSeconds(300);
+        s.setWebFetchTimeoutSeconds(30);
+        o = s.webFetchOptions();
+        QCOMPARE(o.stallMs, 300000);
+        QCOMPARE(o.totalMs, 300000);
+
+        // Changes are announced once, and only when the value really changes.
+        s.setWebFetchStallSeconds(45);
+        QSignalSpy spy(&s, &SettingsController::webFetchChanged);
+        s.setWebFetchStallSeconds(45);
+        QCOMPARE(spy.count(), 0);
+        s.setWebFetchStallSeconds(60);
+        QCOMPARE(spy.count(), 1);
+        s.setWebFetchTimeoutSeconds(90);
+        QCOMPARE(spy.count(), 2);
+
+        // A fresh controller reads them back from the stored settings.
+        SettingsController again(&f.store, &f.client);
+        QCOMPARE(again.webFetchStallSeconds(), 60);
+        QCOMPARE(again.webFetchTimeoutSeconds(), 90);
+    }
+
+    void webFetchLimitsIgnoreGarbageInTheStoredSettings()
+    {
+        {
+            QSettings raw;
+            raw.setValue(QStringLiteral("webFetchStallSeconds"), -5);
+            raw.setValue(QStringLiteral("webFetchTimeoutSeconds"), QStringLiteral("soon"));
+            raw.sync();
+        }
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        QCOMPARE(f.settings->webFetchStallSeconds(), f.settings->webFetchStallMin());
+        QCOMPARE(f.settings->webFetchTimeoutSeconds(), f.settings->webFetchTimeoutMin());
+        f.settings->setWebFetchStallSeconds(WebFetchOptions::kDefaultStallSeconds);
+        f.settings->setWebFetchTimeoutSeconds(WebFetchOptions::kDefaultTotalSeconds);
     }
 
     // -- B1: Regenerate / Edit in a private chat -------------------------------
@@ -529,6 +640,43 @@ private slots:
         }
         QVERIFY2(toolText.contains(QLatin1String("exited")), qPrintable(toolText));
         QCOMPARE(f.chat->messages()->all().last().content, QStringLiteral("recovered"));
+    }
+
+    // -- Stop cancels a web fetch that is still downloading ---------------------
+
+    void stopCancelsAWebFetchInFlight()
+    {
+        HoldServer hold;
+        QVERIFY(hold.listen());
+        const QString url = QStringLiteral("http://127.0.0.1:%1/page").arg(hold.port());
+        Fixture f([url](int i, const QJsonObject &)
+                  {
+                      if (i == 0)
+                          return FakeOpenAi::toolCall(QStringLiteral("web_fetch"),
+                                                      QStringLiteral("{\"url\":\"%1\"}").arg(url));
+                      return FakeOpenAi::text(QStringLiteral("carried on"));
+                  });
+        QVERIFY(f.ok);
+        // Let the fetcher reach the local server (loopback is refused by default).
+        f.chat->webSearch()->setAddressPolicy(
+            [](const QHostAddress &a) { return a.isLoopback() || WebSearch::addressAllowed(a); });
+
+        f.chat->newChat();
+        f.chat->setComposerText(QStringLiteral("read that page"));
+        f.chat->send();
+        QVERIFY(waitFor([&]() { return hold.connections == 1; }));
+        QVERIFY(f.chat->streaming());
+        QCOMPARE(hold.disconnections, 0);
+
+        f.chat->stop();
+        QVERIFY(!f.chat->streaming());
+        // The download was abandoned, not left running until the stall timeout.
+        QVERIFY(waitFor([&]() { return hold.disconnections == 1; }, 2000));
+        QVERIFY(!f.roles().contains(QStringLiteral("tool")));
+
+        // The chat is usable afterwards.
+        QVERIFY(f.say(QStringLiteral("hello again")));
+        QCOMPARE(f.chat->messages()->all().last().content, QStringLiteral("carried on"));
     }
 
     // -- B4: a tool result that outlives its generation is dropped --------------

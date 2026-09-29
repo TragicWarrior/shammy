@@ -9,6 +9,16 @@
 #include <QUrl>
 #include <QVariantMap>
 
+static int clampStallSeconds(int seconds)
+{
+    return qBound(WebFetchOptions::kMinStallSeconds, seconds, WebFetchOptions::kMaxStallSeconds);
+}
+
+static int clampTimeoutSeconds(int seconds)
+{
+    return qBound(WebFetchOptions::kMinTotalSeconds, seconds, WebFetchOptions::kMaxTotalSeconds);
+}
+
 SettingsController::SettingsController(Store *store, OpenAiClient *client, QObject *parent)
     : QObject(parent)
     , m_store(store)
@@ -40,6 +50,11 @@ SettingsController::SettingsController(Store *store, OpenAiClient *client, QObje
         m_webSearchEnabled = m_qs.value(QStringLiteral("webSearchEnabled")).toBool();
     else
         m_webSearchEnabled = !m_webSearchApiKey.trimmed().isEmpty();
+
+    m_webFetchStallSeconds = clampStallSeconds(
+        m_qs.value(QStringLiteral("webFetchStallSeconds"), WebFetchOptions::kDefaultStallSeconds).toInt());
+    m_webFetchTimeoutSeconds = clampTimeoutSeconds(
+        m_qs.value(QStringLiteral("webFetchTimeoutSeconds"), WebFetchOptions::kDefaultTotalSeconds).toInt());
 
     reloadBackends();
     m_backendId = m_store->setting(QStringLiteral("current_backend"));
@@ -254,6 +269,34 @@ void SettingsController::setWebSearchApiKey(const QString &k)
 bool SettingsController::webSearchReady() const
 {
     return m_webSearchEnabled && !m_webSearchApiKey.trimmed().isEmpty();
+}
+
+void SettingsController::setWebFetchStallSeconds(int seconds)
+{
+    const int v = clampStallSeconds(seconds);
+    if (m_webFetchStallSeconds == v)
+        return;
+    m_webFetchStallSeconds = v;
+    m_qs.setValue(QStringLiteral("webFetchStallSeconds"), v);
+    emit webFetchChanged();
+}
+
+void SettingsController::setWebFetchTimeoutSeconds(int seconds)
+{
+    const int v = clampTimeoutSeconds(seconds);
+    if (m_webFetchTimeoutSeconds == v)
+        return;
+    m_webFetchTimeoutSeconds = v;
+    m_qs.setValue(QStringLiteral("webFetchTimeoutSeconds"), v);
+    emit webFetchChanged();
+}
+
+WebFetchOptions SettingsController::webFetchOptions() const
+{
+    WebFetchOptions o;
+    o.stallMs = m_webFetchStallSeconds * 1000;
+    o.totalMs = qMax(m_webFetchTimeoutSeconds, m_webFetchStallSeconds) * 1000;
+    return o;
 }
 
 QString SettingsController::reasoningKey() const

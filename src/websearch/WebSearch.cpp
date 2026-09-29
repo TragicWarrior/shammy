@@ -1,11 +1,15 @@
 #include "websearch/WebSearch.h"
+#include "artifacts/Attach.h"
 
 #include <QHostAddress>
+#include <QHostInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QPointer>
 #include <QRegularExpression>
+#include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
 
@@ -46,7 +50,26 @@ static QString formatHits(const QJsonArray &hits)
 
 WebSearch::WebSearch(QObject *parent)
     : QObject(parent)
+    , m_policy(&WebSearch::addressAllowed)
 {
+    m_resolver = [this](const QString &host, const ResolveDone &done)
+    {
+        QHostInfo::lookupHost(host, this, [done](const QHostInfo &info)
+        {
+            if (info.error() != QHostInfo::NoError)
+                done({}, info.errorString());
+            else
+                done(info.addresses(), {});
+        });
+    };
+}
+
+WebSearch::~WebSearch()
+{
+    // Stop in-flight fetches while the network manager still exists. Their
+    // callbacks are not run: whatever they belong to is going away too.
+    qDeleteAll(m_fetches);
+    m_fetches.clear();
 }
 
 QJsonObject WebSearch::toolDefinition()
@@ -148,34 +171,135 @@ static QString htmlToText(QString html)
     return kept.join(QLatin1Char('\n'));
 }
 
-bool WebSearch::urlAllowed(const QUrl &url)
+namespace {
+
+// IPv4 ranges that are not the public internet.
+bool ipv4Allowed(quint32 v)
+{
+    struct Block
+    {
+        quint32 net;
+        int bits;
+    };
+    static const Block blocked[] = {
+        {0x00000000, 8},  // 0.0.0.0/8       "this network"
+        {0x0a000000, 8},  // 10.0.0.0/8      private
+        {0x64400000, 10}, // 100.64.0.0/10   carrier-grade NAT
+        {0x7f000000, 8},  // 127.0.0.0/8     loopback
+        {0xa9fe0000, 16}, // 169.254.0.0/16  link-local, incl. cloud metadata
+        {0xac100000, 12}, // 172.16.0.0/12   private
+        {0xc0000000, 24}, // 192.0.0.0/24    IETF protocol assignments
+        {0xc0000200, 24}, // 192.0.2.0/24    documentation
+        {0xc0a80000, 16}, // 192.168.0.0/16  private
+        {0xc6120000, 15}, // 198.18.0.0/15   benchmarking
+        {0xc6336400, 24}, // 198.51.100.0/24 documentation
+        {0xcb007100, 24}, // 203.0.113.0/24  documentation
+        {0xe0000000, 4},  // 224.0.0.0/4     multicast
+        {0xf0000000, 4},  // 240.0.0.0/4     reserved, incl. broadcast
+    };
+    for (const Block &blk : blocked)
+    {
+        const quint32 mask = ~quint32(0) << (32 - blk.bits);
+        if ((v & mask) == blk.net)
+            return false;
+    }
+    return true;
+}
+
+// Hostnames that are never public, and single-label names, which the
+// operating system resolves through the local network's search domains.
+// Anything else is resolved and its addresses checked before it is requested.
+bool hostNameAllowed(const QString &host)
+{
+    if (host.isEmpty() || !host.contains(QLatin1Char('.')))
+        return false;
+    static const QStringList reserved = {
+        QStringLiteral(".localhost"),   QStringLiteral(".local"),    QStringLiteral(".localdomain"),
+        QStringLiteral(".internal"),    QStringLiteral(".lan"),      QStringLiteral(".home.arpa"),
+        QStringLiteral(".intranet"),
+    };
+    for (const QString &suffix : reserved)
+    {
+        if (host.endsWith(suffix))
+            return false;
+    }
+    return true;
+}
+
+QString normalizedHost(const QUrl &url)
+{
+    QString host = url.host().toLower();
+    while (host.endsWith(QLatin1Char('.')))
+        host.chop(1);
+    return host;
+}
+
+bool urlAllowedWith(const QUrl &url, const WebSearch::AddressPolicy &policy)
 {
     const QString scheme = url.scheme().toLower();
     if (scheme != QLatin1String("http") && scheme != QLatin1String("https"))
         return false;
-    const QString host = url.host().toLower();
-    if (host.isEmpty() || host == QLatin1String("localhost") || host == QLatin1String("127.0.0.1")
-        || host == QLatin1String("::1") || host == QLatin1String("[::1]") || host == QLatin1String("0.0.0.0")
-        || host == QLatin1String("metadata.google.internal") || host.endsWith(QLatin1String(".localhost"))
-        || host.endsWith(QLatin1String(".local")))
+    const QString host = normalizedHost(url);
+    if (host.isEmpty())
         return false;
-    const QHostAddress addr(host);
-    if (!addr.isNull())
+    const QHostAddress literal(host);
+    if (!literal.isNull())
+        return policy(literal);
+    return hostNameAllowed(host);
+}
+
+} // namespace
+
+bool WebSearch::addressAllowed(const QHostAddress &addr)
+{
+    if (addr.isNull())
+        return false;
+    if (addr.protocol() == QAbstractSocket::IPv4Protocol)
+        return ipv4Allowed(addr.toIPv4Address());
+    if (addr.protocol() != QAbstractSocket::IPv6Protocol)
+        return false;
+
+    const Q_IPV6ADDR a = addr.toIPv6Address();
+    const auto v4At = [&a](int off)
     {
-        if (addr.isLoopback() || addr.isLinkLocal() || addr.isMulticast())
-            return false;
-        if (addr.protocol() == QAbstractSocket::IPv4Protocol)
+        return (quint32(a[off]) << 24) | (quint32(a[off + 1]) << 16) | (quint32(a[off + 2]) << 8)
+            | quint32(a[off + 3]);
+    };
+    const auto zeros = [&a](int from, int to)
+    {
+        for (int i = from; i < to; ++i)
         {
-            const quint32 v = addr.toIPv4Address();
-            if ((v & 0xff000000u) == 0x0a000000u     // 10.0.0.0/8
-                || (v & 0xfff00000u) == 0xac100000u  // 172.16.0.0/12
-                || (v & 0xffff0000u) == 0xc0a80000u  // 192.168.0.0/16
-                || (v & 0xffc00000u) == 0x64400000u  // 100.64.0.0/10
-                || (v & 0xff000000u) == 0x7f000000u) // 127.0.0.0/8
+            if (a[i])
                 return false;
         }
-    }
+        return true;
+    };
+    if (zeros(0, 12))                                            // ::/96  unspecified, loopback, IPv4-compatible
+        return false;
+    if (zeros(0, 10) && a[10] == 0xff && a[11] == 0xff)         // ::ffff:0:0/96  IPv4-mapped
+        return ipv4Allowed(v4At(12));
+    if (a[0] == 0x00 && a[1] == 0x64 && a[2] == 0xff && a[3] == 0x9b && zeros(4, 12)) // 64:ff9b::/96  NAT64
+        return ipv4Allowed(v4At(12));
+    if (a[0] == 0x20 && a[1] == 0x02)                           // 2002::/16  6to4
+        return ipv4Allowed(v4At(2));
+    if (a[0] == 0x20 && a[1] == 0x01 && a[2] == 0x00 && a[3] == 0x00) // 2001::/32  Teredo
+        return false;
+    if (a[0] == 0x20 && a[1] == 0x01 && a[2] == 0x0d && a[3] == 0xb8) // 2001:db8::/32  documentation
+        return false;
+    if ((a[0] & 0xfe) == 0xfc)                                  // fc00::/7  unique local
+        return false;
+    if (a[0] == 0xfe)                                           // fe00::/8  link-local, site-local, reserved
+        return false;
+    if (a[0] == 0xff)                                           // ff00::/8  multicast
+        return false;
+    if (a[0] == 0x01 && a[1] == 0x00 && zeros(2, 8))            // 100::/64  discard-only
+        return false;
     return true;
+}
+
+bool WebSearch::urlAllowed(const QUrl &url)
+{
+    return urlAllowedWith(url, &WebSearch::addressAllowed);
 }
 
 QUrl WebSearch::canonicalizeFetchUrl(const QUrl &url)
@@ -228,6 +352,21 @@ bool isStaticAssetContentType(const QString &contentType)
     return ct.contains(QLatin1String("javascript")) || ct.contains(QLatin1String("ecmascript"))
         || ct == QLatin1String("text/css") || ct.contains(QLatin1String("wasm"))
         || ct.startsWith(QLatin1String("font/"));
+}
+
+// Types that are not a text document. Known from the response headers, so a
+// download of one can be stopped before any of the body is read.
+bool isNonTextContentType(const QString &contentType)
+{
+    QString ct = contentType;
+    const int semi = ct.indexOf(QLatin1Char(';'));
+    if (semi >= 0)
+        ct = ct.left(semi);
+    ct = ct.trimmed().toLower();
+    return ct.startsWith(QLatin1String("image/")) || ct.startsWith(QLatin1String("audio/"))
+        || ct.startsWith(QLatin1String("video/")) || isStaticAssetContentType(contentType)
+        || ct == QLatin1String("application/pdf") || ct == QLatin1String("application/octet-stream")
+        || ct == QLatin1String("application/zip") || ct == QLatin1String("application/gzip");
 }
 
 } // namespace
@@ -307,11 +446,7 @@ QString WebSearch::extractText(const QByteArray &body, const QString &contentTyp
     if (semi >= 0)
         ct = ct.left(semi);
     ct = ct.trimmed().toLower();
-    if (ct.startsWith(QLatin1String("image/")) || ct.startsWith(QLatin1String("audio/"))
-        || ct.startsWith(QLatin1String("video/")) || isStaticAssetContentType(contentType)
-        || ct == QLatin1String("application/pdf")
-        || ct == QLatin1String("application/octet-stream") || ct == QLatin1String("application/zip")
-        || ct == QLatin1String("application/gzip"))
+    if (isNonTextContentType(contentType))
         return {};
     const QString s = QString::fromUtf8(body);
     const bool html = ct.contains(QLatin1String("html"))
@@ -442,8 +577,10 @@ void WebSearch::search(const QString &provider, const QString &apiKey, const QSt
         req.setRawHeader("X-Subscription-Token", key.toUtf8());
         reply = m_nam.get(req);
     }
-    QObject::connect(reply, &QNetworkReply::finished, this, [reply, p, cb]()
+    m_searchReplies.insert(reply);
+    QObject::connect(reply, &QNetworkReply::finished, this, [this, reply, p, cb]()
     {
+        m_searchReplies.remove(reply);
         reply->deleteLater();
         const QByteArray raw = reply->readAll();
         if (reply->error() != QNetworkReply::NoError)
@@ -478,7 +615,377 @@ void WebSearch::search(const QString &provider, const QString &apiKey, const QSt
     });
 }
 
-void WebSearch::fetch(const QString &urlStr, const std::function<void(QString text, QString error)> &cb)
+// One page fetch. It reads the body as it arrives and stops the moment carrying
+// on cannot help (see WebSearch::fetch). Owned by the WebSearch that made it and
+// gone once it has reported its result.
+class WebSearch::Fetch : public QObject
+{
+public:
+    Fetch(WebSearch *ws, const QUrl &url, const WebFetchOptions &opts, Callback cb)
+        : QObject(ws)
+        , m_ws(ws)
+        , m_url(url)
+        , m_opts(opts)
+        , m_cb(std::move(cb))
+    {
+        m_stall.setSingleShot(true);
+        m_total.setSingleShot(true);
+        connect(&m_stall, &QTimer::timeout, this, [this]()
+        {
+            fail(QStringLiteral("no data received for %1 s").arg(m_opts.stallMs / 1000.0, 0, 'g', 3));
+        });
+        connect(&m_total, &QTimer::timeout, this, [this]()
+        {
+            fail(QStringLiteral("gave up after %1 s").arg(m_opts.totalMs / 1000.0, 0, 'g', 3));
+        });
+    }
+
+    ~Fetch() override { dropReply(); }
+
+    void start()
+    {
+        m_total.start(m_opts.totalMs);
+        begin(m_url);
+    }
+
+    void cancel() { fail(QStringLiteral("cancelled")); }
+
+private:
+    static constexpr int kMaxRedirects = 5;
+    static constexpr qint64 kSniffBytes = 4096;
+    static constexpr qint64 kMaxRedirectBody = 64 * 1024;
+    static constexpr qint64 kReadBuffer = 256 * 1024;
+
+    static bool isRedirect(int status)
+    {
+        return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+    }
+
+    QString notAllowed() const
+    {
+        return m_hops > 0 ? QStringLiteral("the page redirected to a URL that is not allowed")
+                          : QStringLiteral("that URL is not allowed");
+    }
+
+    // Checks that need no network, then a lookup of the hostname: every address
+    // it resolves to must be acceptable, not just the first.
+    void begin(const QUrl &url)
+    {
+        m_url = url;
+        if (!urlAllowedWith(url, m_ws->m_policy))
+        {
+            fail(notAllowed());
+            return;
+        }
+        const QString host = normalizedHost(url);
+        if (!QHostAddress(host).isNull())
+        {
+            request();
+            return;
+        }
+        QPointer<Fetch> self(this);
+        m_ws->m_resolver(host, [self](QList<QHostAddress> addresses, QString error)
+        {
+            if (self)
+                self->resolved(addresses, error);
+        });
+    }
+
+    void resolved(const QList<QHostAddress> &addresses, const QString &error)
+    {
+        if (m_done)
+            return;
+        if (!error.isEmpty() || addresses.isEmpty())
+        {
+            fail(QStringLiteral("could not look up %1").arg(m_url.host()));
+            return;
+        }
+        for (const QHostAddress &a : addresses)
+        {
+            if (!m_ws->m_policy(a))
+            {
+                fail(notAllowed());
+                return;
+            }
+        }
+        request();
+    }
+
+    void request()
+    {
+        QNetworkRequest req(m_url);
+        // Redirects are followed by hand so each hop gets the same checks.
+        req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+        req.setRawHeader("User-Agent", "Shammy/0.1");
+        req.setRawHeader("Accept",
+                         "text/html, text/plain, text/markdown, application/json, "
+                         "application/xhtml+xml, */*;q=0.8");
+        m_body.clear();
+        m_discarded = 0;
+        m_status = 0;
+        m_headersSeen = false;
+        m_sniffed = false;
+        m_contentType.clear();
+        m_reply = m_ws->m_nam.get(req);
+        m_reply->setReadBufferSize(kReadBuffer);
+        connect(m_reply, &QNetworkReply::metaDataChanged, this, [this]() { onMeta(); });
+        connect(m_reply, &QNetworkReply::readyRead, this, [this]() { onData(); });
+        connect(m_reply, &QNetworkReply::downloadProgress, this, [this]() { kick(); });
+        connect(m_reply, &QNetworkReply::finished, this, [this]() { onFinished(); });
+        kick();
+    }
+
+    // Any sign of life counts as progress and restarts the stall timer.
+    void kick()
+    {
+        if (!m_done)
+            m_stall.start(m_opts.stallMs);
+    }
+
+    void onMeta()
+    {
+        kick();
+        if (m_headersSeen || !m_reply)
+            return;
+        const QVariant status = m_reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
+        if (!status.isValid())
+            return;
+        m_headersSeen = true;
+        m_status = status.toInt();
+        m_contentType = m_reply->header(QNetworkRequest::ContentTypeHeader).toString();
+        if (isRedirect(m_status))
+            return; // followed once the (small) reply is complete
+        if (m_status >= 400)
+        {
+            fail(httpError(), true);
+            return;
+        }
+        // The type is known before any of the body is: refuse what cannot help.
+        if (isStaticAssetContentType(m_contentType))
+        {
+            hintAndStop();
+            return;
+        }
+        if (isNonTextContentType(m_contentType))
+            fail(notText());
+    }
+
+    void onData()
+    {
+        if (m_done || !m_reply)
+            return;
+        if (!m_headersSeen)
+            onMeta();
+        if (m_done || !m_reply)
+            return;
+        kick();
+        const QByteArray chunk = m_reply->readAll();
+        if (isRedirect(m_status))
+        {
+            m_discarded += chunk.size();
+            if (m_discarded > kMaxRedirectBody)
+                fail(QStringLiteral("the redirect response was too large"));
+            return;
+        }
+        m_body += chunk;
+        // A page that says it is text but is not: judge it from its first bytes.
+        if (!m_sniffed && m_body.size() >= kSniffBytes)
+        {
+            m_sniffed = true;
+            if (!Attach::looksLikeText(m_body.left(kSniffBytes)))
+            {
+                fail(QStringLiteral("that URL is not a text document (it looks like binary data)"));
+                return;
+            }
+        }
+        if (m_body.size() > m_opts.maxBytes)
+        {
+            m_body.truncate(m_opts.maxBytes);
+            dropReply();
+            complete(true);
+        }
+    }
+
+    void onFinished()
+    {
+        if (m_done || !m_reply)
+            return;
+        m_stall.stop();
+        if (isRedirect(m_status))
+        {
+            followRedirect();
+            return;
+        }
+        if (m_status >= 400)
+        {
+            fail(httpError());
+            return;
+        }
+        if (m_reply->error() != QNetworkReply::NoError)
+        {
+            fail(m_reply->errorString());
+            return;
+        }
+        m_body += m_reply->readAll();
+        bool clipped = false;
+        if (m_body.size() > m_opts.maxBytes)
+        {
+            m_body.truncate(m_opts.maxBytes);
+            clipped = true;
+        }
+        if (!m_sniffed && !Attach::looksLikeText(m_body.left(kSniffBytes)))
+        {
+            fail(QStringLiteral("that URL is not a text document (it looks like binary data)"));
+            return;
+        }
+        complete(clipped);
+    }
+
+    void followRedirect()
+    {
+        // Read the raw header: Qt's parsed LocationHeader is empty for the very
+        // common relative form ("Location: /next").
+        const QByteArray rawLocation = m_reply->rawHeader("Location").trimmed();
+        const QUrl location = QUrl::fromEncoded(rawLocation, QUrl::TolerantMode);
+        if (rawLocation.isEmpty() || !location.isValid())
+        {
+            fail(QStringLiteral("the page redirected without saying where"));
+            return;
+        }
+        if (++m_hops > kMaxRedirects)
+        {
+            fail(QStringLiteral("too many redirects"));
+            return;
+        }
+        const QUrl next = canonicalizeFetchUrl(m_url.resolved(location));
+        if (m_url.scheme().toLower() == QLatin1String("https") && next.scheme().toLower() != QLatin1String("https"))
+        {
+            fail(QStringLiteral("the page redirected from https to http"));
+            return;
+        }
+        dropReply();
+        if (isStaticAssetUrl(next))
+        {
+            finish(staticAssetHint(next), {});
+            return;
+        }
+        begin(next);
+    }
+
+    void complete(bool clipped)
+    {
+        QString text = extractText(m_body, m_contentType);
+        if (text.trimmed().isEmpty())
+        {
+            finish({}, notText());
+            return;
+        }
+        if (text.size() > kMaxFetchChars)
+        {
+            text.truncate(kMaxFetchChars);
+            text += QStringLiteral("\n\n[truncated]");
+        }
+        else if (clipped)
+        {
+            text += QStringLiteral("\n\n[truncated]");
+        }
+        finish(QStringLiteral("URL: %1\n\n%2").arg(m_url.toString(), text), {});
+    }
+
+    QString notText() const
+    {
+        return QStringLiteral("that URL is not a text document (%1)")
+            .arg(m_contentType.isEmpty() ? QStringLiteral("unknown type") : m_contentType);
+    }
+
+    QString httpError() const
+    {
+        const QString reason =
+            m_reply ? m_reply->attribute(QNetworkRequest::HttpReasonPhraseAttribute).toString() : QString();
+        return QStringLiteral("HTTP %1 %2").arg(m_status).arg(reason).trimmed();
+    }
+
+    void hintAndStop()
+    {
+        const QString hint = staticAssetHint(m_url);
+        dropReply();
+        finish(hint, {});
+    }
+
+    // Stops the transfer at once, which is what keeps a huge body from being
+    // pulled in. The exception is an HTTP error status: Qt reports its own error
+    // for those while it is still working through the response it just
+    // delivered, and an abort on top of that makes it log "error must only be
+    // called once". So for those the abort waits for the next turn of the event
+    // loop, by which time a short error page has finished by itself.
+    void dropReply(bool afterQtSettles = false)
+    {
+        if (!m_reply)
+            return;
+        QNetworkReply *reply = m_reply;
+        m_reply = nullptr;
+        reply->disconnect(this);
+        if (afterQtSettles)
+        {
+            QMetaObject::invokeMethod(
+                reply,
+                [reply]()
+                {
+                    if (reply->isRunning())
+                        reply->abort();
+                    reply->deleteLater();
+                },
+                Qt::QueuedConnection);
+            return;
+        }
+        if (reply->isRunning())
+            reply->abort();
+        reply->deleteLater();
+    }
+
+    void fail(const QString &error, bool afterQtSettles = false)
+    {
+        dropReply(afterQtSettles);
+        finish({}, error);
+    }
+
+    void finish(const QString &text, const QString &error)
+    {
+        if (m_done)
+            return;
+        m_done = true;
+        m_stall.stop();
+        m_total.stop();
+        m_ws->m_fetches.removeAll(this);
+        Callback cb = std::move(m_cb);
+        deleteLater();
+        if (cb)
+            cb(text, error);
+    }
+
+    WebSearch *m_ws;
+    QUrl m_url;
+    WebFetchOptions m_opts;
+    Callback m_cb;
+    QPointer<QNetworkReply> m_reply;
+    QTimer m_stall;
+    QTimer m_total;
+    QByteArray m_body;
+    QString m_contentType;
+    qint64 m_discarded = 0;
+    int m_status = 0;
+    int m_hops = 0;
+    bool m_headersSeen = false;
+    bool m_sniffed = false;
+    bool m_done = false;
+};
+
+void WebSearch::fetch(const QString &urlStr, const Callback &cb)
+{
+    fetch(urlStr, cb, WebFetchOptions());
+}
+
+void WebSearch::fetch(const QString &urlStr, const Callback &cb, const WebFetchOptions &requested)
 {
     QUrl url = QUrl::fromUserInput(urlStr.trimmed());
     if (!url.isValid() || url.host().isEmpty())
@@ -487,7 +994,7 @@ void WebSearch::fetch(const QString &urlStr, const std::function<void(QString te
         return;
     }
     url = canonicalizeFetchUrl(url);
-    if (!urlAllowed(url))
+    if (!urlAllowedWith(url, m_policy))
     {
         cb({}, QStringLiteral("that URL is not allowed"));
         return;
@@ -497,59 +1004,24 @@ void WebSearch::fetch(const QString &urlStr, const std::function<void(QString te
         cb(staticAssetHint(url), {});
         return;
     }
+    WebFetchOptions opts = requested;
+    if (opts.stallMs <= 0)
+        opts.stallMs = WebFetchOptions().stallMs;
+    if (opts.totalMs < opts.stallMs)
+        opts.totalMs = opts.stallMs;
+    if (opts.maxBytes <= 0)
+        opts.maxBytes = WebFetchOptions::kDefaultMaxBytes;
+    auto *job = new Fetch(this, url, opts, cb);
+    m_fetches.append(job);
+    job->start();
+}
 
-    QNetworkRequest req(url);
-    req.setTransferTimeout(20000);
-    req.setMaximumRedirectsAllowed(5);
-    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
-                     QNetworkRequest::NoLessSafeRedirectPolicy);
-    req.setRawHeader("User-Agent", "Shammy/0.1");
-    req.setRawHeader("Accept",
-                     "text/html, text/plain, text/markdown, application/json, "
-                     "application/xhtml+xml, */*;q=0.8");
-    QNetworkReply *reply = m_nam.get(req);
-    QObject::connect(reply, &QNetworkReply::redirected, reply, [reply](const QUrl &next)
-    {
-        if (!WebSearch::urlAllowed(next))
-            reply->abort();
-    });
-    QObject::connect(reply, &QNetworkReply::finished, reply, [reply, cb]()
-    {
-        reply->deleteLater();
-        constexpr int kMaxBytes = 512 * 1024;
-        if (reply->error() != QNetworkReply::NoError)
-        {
-            if (reply->error() == QNetworkReply::OperationCanceledError)
-                cb({}, QStringLiteral("fetch was redirected to a URL that is not allowed"));
-            else
-                cb({}, reply->errorString());
-            return;
-        }
-        const QByteArray raw = reply->read(kMaxBytes + 1);
-        const bool clippedBytes = raw.size() > kMaxBytes;
-        const QByteArray body = clippedBytes ? raw.left(kMaxBytes) : raw;
-        const QString ctype = reply->header(QNetworkRequest::ContentTypeHeader).toString();
-        const QUrl final = reply->url();
-        if (isStaticAssetUrl(final) || isStaticAssetContentType(ctype))
-        {
-            cb(staticAssetHint(final), {});
-            return;
-        }
-        QString text = extractText(body, ctype);
-        if (text.trimmed().isEmpty())
-        {
-            cb({}, QStringLiteral("that URL is not a text document (%1)").arg(
-                   ctype.isEmpty() ? QStringLiteral("unknown type") : ctype));
-            return;
-        }
-        if (text.size() > kMaxFetchChars)
-        {
-            text.truncate(kMaxFetchChars);
-            text += QStringLiteral("\n\n[truncated]");
-        }
-        else if (clippedBytes)
-            text += QStringLiteral("\n\n[truncated]");
-        const QString finalUrl = reply->url().toString();
-        cb(QStringLiteral("URL: %1\n\n%2").arg(finalUrl, text), {});
-    });
+void WebSearch::cancelAll()
+{
+    const QList<Fetch *> fetches = m_fetches;
+    for (Fetch *f : fetches)
+        f->cancel();
+    const QSet<QNetworkReply *> replies = m_searchReplies;
+    for (QNetworkReply *r : replies)
+        r->abort();
 }
