@@ -1,3 +1,15 @@
+shammy (0.12.0-1) unstable; urgency=medium
+
+  * Read PDFs in chat attachments and project files (needs pdftotext).
+  * Convert Word, spreadsheet and PDF attachments in the background.
+  * Size project files and chat attachments to the model's context window.
+  * Refuse project files that are not text; delete removed files from disk.
+  * Harden web_fetch: stop early, size and time limits, block private addresses.
+  * Keep a typed draft when Enter is pressed while a reply is streaming.
+  * Packaging: stay installed across Ubuntu release upgrades.
+
+ -- Bryan Christ <bryan.christ@gmail.com>  Sat, 03 Oct 2026 22:14:49 -0500
+
 shammy (0.11.1-1) unstable; urgency=medium
 
   * Keep history when regenerating or editing in a private chat.
