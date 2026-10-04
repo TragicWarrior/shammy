@@ -2,11 +2,8 @@
 #include "Util.h"
 #include "artifacts/ArtifactExtractor.h"
 #include "artifacts/Attach.h"
-#include "artifacts/DocumentExtract.h"
 #include "artifacts/DocxExport.h"
 #include "artifacts/HtmlDocument.h"
-#include "artifacts/PdfExtract.h"
-#include "artifacts/SpreadsheetExtract.h"
 #include "openai/ToolCallXml.h"
 
 #include <QBuffer>
@@ -636,9 +633,48 @@ QStringList ChatController::pendingAttachments() const
     out.reserve(m_pending.size());
     for (const PendingAttach &a : m_pending)
     {
-        out.append(a.label + QStringLiteral(" — ") + a.rest);
+        out.append((a.converting ? a.label + QStringLiteral(" (converting…)") : a.label) + QStringLiteral(" — ")
+                   + a.rest);
     }
     return out;
+}
+
+bool ChatController::attachmentsBusy() const
+{
+    for (const PendingAttach &a : m_pending)
+    {
+        if (a.converting)
+            return true;
+    }
+    return false;
+}
+
+FileImport::Tools ChatController::fileTools() const
+{
+    return {m_settings->officeBinaryPath(), m_settings->pdftotextBinaryPath()};
+}
+
+void ChatController::finishAttachConversion(quint64 id, const FileImport::Result &result)
+{
+    for (int i = 0; i < m_pending.size(); ++i)
+    {
+        if (m_pending.at(i).id != id)
+            continue;
+        if (!result.error.isEmpty() || result.items.isEmpty())
+        {
+            const QString name = m_pending.at(i).label;
+            m_pending.removeAt(i);
+            emit pendingAttachmentsChanged();
+            setError(QStringLiteral("Can't attach `%1`: %2")
+                         .arg(name, result.error.isEmpty() ? QStringLiteral("it could not be converted.") : result.error));
+            return;
+        }
+        m_pending[i].converted = result.items;
+        m_pending[i].converting = false;
+        emit pendingAttachmentsChanged();
+        return;
+    }
+    // Removed (or the composer was cleared) while it was converting: nothing to do.
 }
 
 void ChatController::clearPending()
@@ -729,45 +765,34 @@ bool ChatController::tryAttachPath(const QString &path, QString *error)
         emit pendingAttachmentsChanged();
         return true;
     }
-    if (kind == Attach::Kind::Spreadsheet)
+    // Everything else goes in as text: as it is, converted by a tool that is
+    // installed (the same rules as project files), or not at all.
+    const FileImport::Classification c = FileImport::classify(path, fileTools());
+    if (c.plan == FileImport::Plan::Refuse)
     {
-        if (!DocxExport::available(m_settings->officeBinaryPath()))
-        {
-            return fail(
-                QStringLiteral(
-                    "Can't attach `%1`: LibreOffice/OpenOffice is needed to convert spreadsheets.")
-                    .arg(fi.fileName()));
-        }
-    }
-    else if (kind == Attach::Kind::Document)
-    {
-        if (!DocxExport::available(m_settings->officeBinaryPath()))
-        {
-            return fail(QStringLiteral(
-                            "Can't attach `%1`: LibreOffice/OpenOffice is needed to read Word "
-                            "and OpenDocument files.")
-                            .arg(fi.fileName()));
-        }
-    }
-    else if (kind == Attach::Kind::Pdf)
-    {
-        const QString tool = m_settings->pdftotextBinaryPath();
-        if (!PdfExtract::available(tool))
-        {
-            return fail(QStringLiteral("Can't attach `%1`: %2").arg(fi.fileName(), PdfExtract::missingToolMessage(tool)));
-        }
-    }
-    else if (kind == Attach::Kind::Unsupported)
-    {
-        return fail(QStringLiteral("Can't attach `%1`: that file type isn't supported.")
-                        .arg(fi.fileName()));
+        return fail(QStringLiteral("Can't attach `%1`: %2").arg(fi.fileName(), c.reason));
     }
 
     PendingAttach a;
     a.type = PendingAttach::File;
+    a.id = ++m_attachSeq;
+    a.kind = c.kind;
     a.label = fi.fileName();
     a.rest = path;
     a.path = path;
+    if (c.plan == FileImport::Plan::Convert)
+    {
+        // Convert it now, in the background, so that sending never waits on
+        // LibreOffice or pdftotext, and a file that can't be read is reported
+        // before the message goes out rather than inside it.
+        a.converting = true;
+        const quint64 id = a.id;
+        FileImport::convertInBackground(path, fileTools(), this,
+                                        [this, id](const FileImport::Result &result)
+                                        {
+                                            finishAttachConversion(id, result);
+                                        });
+    }
     m_pending.append(a);
     emit pendingAttachmentsChanged();
     return true;
@@ -1120,10 +1145,10 @@ void ChatController::removeAttachment(int index)
     emit pendingAttachmentsChanged();
 }
 
-void ChatController::send()
+bool ChatController::send()
 {
     if (m_streaming || m_compacting)
-        return;
+        return false;
     QString text = m_composer.trimmed();
     const Compact::Command cmd = Compact::parseCommand(text);
     if (cmd.passthrough)
@@ -1156,98 +1181,18 @@ void ChatController::send()
         {
             setCompactStatus(Compact::unknownCommandText(cmd.name));
         }
-        return;
+        return true;
+    }
+    if (attachmentsBusy())
+    {
+        return false;
     }
     m_suppressAutoCompact = false;
-    QString extra;
     QVector<ContentPart> images;
-    for (const PendingAttach &a : m_pending)
-    {
-        if (a.type == PendingAttach::Image)
-        {
-            images.append(a.image);
-            continue;
-        }
-        if (a.type == PendingAttach::Paste)
-        {
-            QString body = a.paste;
-            if (body.size() > 256 * 1024)
-            {
-                body.truncate(256 * 1024);
-            }
-            extra += QStringLiteral("\n\n%1:\n```\n%2\n```").arg(a.label, body);
-            continue;
-        }
-        const QString path = a.path;
-        QFileInfo fi(path);
-        if (SpreadsheetExtract::isSpreadsheetPath(path))
-        {
-            QString err;
-            const auto sheets = SpreadsheetExtract::extract(path, m_settings->officeBinaryPath(), &err);
-            if (sheets.isEmpty())
-            {
-                extra += QStringLiteral("\n\nAttached spreadsheet `%1` could not be read: %2")
-                             .arg(fi.fileName(), err.isEmpty() ? QStringLiteral("unknown error") : err);
-                continue;
-            }
-            for (const SpreadsheetExtract::Sheet &sh : sheets)
-            {
-                QString csv = sh.csv;
-                if (csv.size() > 32 * 1024)
-                {
-                    csv.truncate(32 * 1024);
-                }
-                extra += QStringLiteral("\n\nAttached spreadsheet `%1` sheet `%2`:\n```csv\n%3\n```")
-                             .arg(fi.fileName(), sh.name, csv);
-            }
-            continue;
-        }
-        if (DocumentExtract::isDocumentPath(path))
-        {
-            QString err;
-            QString body = DocumentExtract::extract(path, m_settings->officeBinaryPath(), &err);
-            if (body.isEmpty())
-            {
-                extra += QStringLiteral("\n\nAttached document `%1` could not be read: %2")
-                             .arg(fi.fileName(), err.isEmpty() ? QStringLiteral("unknown error") : err);
-                continue;
-            }
-            if (body.size() > 256 * 1024)
-            {
-                body.truncate(256 * 1024);
-            }
-            extra += QStringLiteral("\n\nAttached document `%1`:\n```\n%2\n```")
-                         .arg(fi.fileName(), body);
-            continue;
-        }
-        if (PdfExtract::isPdfPath(path))
-        {
-            QString err;
-            QString body = PdfExtract::extract(path, m_settings->pdftotextBinaryPath(), &err);
-            if (body.isEmpty())
-            {
-                extra += QStringLiteral("\n\nAttached PDF `%1` could not be read: %2")
-                             .arg(fi.fileName(), err.isEmpty() ? QStringLiteral("unknown error") : err);
-                continue;
-            }
-            if (body.size() > 256 * 1024)
-            {
-                body.truncate(256 * 1024);
-            }
-            extra += QStringLiteral("\n\nAttached PDF `%1`:\n```\n%2\n```").arg(fi.fileName(), body);
-            continue;
-        }
-        QFile f(path);
-        if (!f.open(QIODevice::ReadOnly))
-        {
-            continue;
-        }
-        extra += QStringLiteral("\n\nAttached file `%1`:\n```\n%2\n```")
-                     .arg(fi.fileName(), QString::fromUtf8(f.read(32 * 1024)));
-    }
+    const QString extra = attachmentsText(&images);
     if (text.isEmpty() && extra.isEmpty() && images.isEmpty())
     {
-        return;
+        return false;
     }
 
     // Actively sending a message here supersedes a generation still running in
@@ -1296,6 +1241,78 @@ void ChatController::send()
     m_forceFinalWrite = false;
     m_finalWriteAttempts = 0;
     startGeneration();
+    return true;
+}
+
+// The pending attachments as text for the message, sized to the context window
+// of the model that will answer: together they get the same share of it as
+// project files do (FileImport::budgetBytes), one file at most half of that.
+// What is cut short or left out is marked, so the model (and the user, who sees
+// the message) knows. Images are collected separately.
+QString ChatController::attachmentsText(QVector<ContentPart> *images) const
+{
+    const int contextTokens =
+        m_settings->contextSizeFor(m_settings->currentBackendId(), m_settings->currentModel());
+    const qint64 budget = FileImport::budgetBytes(contextTokens);
+    const qint64 perFile = FileImport::perFileLimitBytes(budget);
+    qint64 remaining = budget;
+    QString out;
+    const auto add = [&](const QString &header, QByteArray data, const QString &fence)
+    {
+        if (remaining <= 0)
+        {
+            out += QStringLiteral("\n\n%1 was left out: there is no room left for it in the model's context window.")
+                       .arg(header);
+            return;
+        }
+        const bool cut = FileImport::cutToFit(data, qMin(perFile, remaining));
+        remaining -= data.size();
+        out += QStringLiteral("\n\n%1:\n```%2\n%3\n```").arg(header, fence, QString::fromUtf8(data));
+        if (cut)
+            out += QStringLiteral("\n(Cut to fit the model's context window.)");
+    };
+    for (const PendingAttach &a : m_pending)
+    {
+        if (a.type == PendingAttach::Image)
+        {
+            images->append(a.image);
+            continue;
+        }
+        if (a.type == PendingAttach::Paste)
+        {
+            add(a.label, a.paste.toUtf8(), {});
+            continue;
+        }
+        if (!a.converted.isEmpty())
+        {
+            for (const FileImport::Item &item : a.converted)
+            {
+                if (a.kind == Attach::Kind::Spreadsheet)
+                    add(QStringLiteral("Attached spreadsheet `%1` sheet `%2`").arg(a.label, item.title), item.data,
+                        QStringLiteral("csv"));
+                else if (a.kind == Attach::Kind::Pdf)
+                    add(QStringLiteral("Attached PDF `%1`").arg(a.label), item.data, {});
+                else
+                    add(QStringLiteral("Attached document `%1`").arg(a.label), item.data, {});
+            }
+            continue;
+        }
+        // A text file: read now, and only as much of it as can be used.
+        const QString header = QStringLiteral("Attached file `%1`").arg(a.label);
+        if (remaining <= 0)
+        {
+            add(header, {}, {});
+            continue;
+        }
+        QFile f(a.path);
+        if (!f.open(QIODevice::ReadOnly))
+        {
+            out += QStringLiteral("\n\n%1 could not be read: %2").arg(header, f.errorString());
+            continue;
+        }
+        add(header, f.read(qMin(perFile, remaining) + 1), {});
+    }
+    return out;
 }
 
 void ChatController::beginAssistant()

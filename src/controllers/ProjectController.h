@@ -49,8 +49,8 @@ public:
     bool filesBusy() const { return m_busy > 0; }
 
     // Project instructions and files are sent with every chat, so they may use
-    // only a share of the model's context window (kContextSharePercent), never
-    // more than kMaxBudgetBytes. Sizes are bytes; a token is taken as ~4 bytes.
+    // only a share of the model's context window (FileImport::budgetBytes).
+    // Sizes are bytes; a token is taken as ~4 bytes.
     static qint64 preloadBudgetBytes(int contextTokens);
     // No single file may take more than this much of that budget.
     static qint64 perFileLimitBytes(qint64 budgetBytes);
@@ -97,8 +97,9 @@ private:
     bool storeFile(const QString &projectId, const QString &filename, const QByteArray &data);
     bool storeCopy(const QString &projectId, const QString &sourcePath);
     void registerFile(const QString &projectId, const QString &filename, const QString &dest);
+    static FileImport::Tools fileTools();
     void startConversion(const QString &projectId, const QString &path);
-    void finishConversion(const QString &projectId, const FileImport::Result &result);
+    void finishConversion(const QString &projectId, const QString &name, const FileImport::Result &result);
     void appendFilesError(const QString &message);
     // Only ever deletes inside projectsRoot(): a stored path is data from the
     // database, and must not be able to point this at anything else.
