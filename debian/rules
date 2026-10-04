@@ -16,5 +16,14 @@ override_dh_auto_configure:
 	dh_auto_configure -- \
 		-DWITH_WEBENGINE=ON
 
+# Ubuntu 24.04 names some Qt libraries libqt6<x>6t64; later releases dropped the
+# suffix without a Provides, so a package that names only one spelling is
+# removed by a release upgrade (apt cannot satisfy it). Depend on either name.
+# The binary itself carries over: Qt keeps binary compatibility within Qt 6.
+QT_T64 = core|gui|network|sql|dbus|widgets|concurrent|xml|test|opengl|openglwidgets|printsupport
+override_dh_shlibdeps:
+	dh_shlibdeps
+	perl -pi -e 'if (/^shlibs:Depends=/) { s/\b(libqt6(?:$(QT_T64))6)(t64)?( \([^)]*\))?(?= *(?:,|$$))/$$2 ? "$$1t64$$3 | $$1$$3" : "$$1$$3 | $$1t64$$3"/ge }' debian/shammy.substvars
+
 # The deb target in CMakeLists.txt moves ../shammy_* into releases/ after
 # dpkg-buildpackage. This dpkg has no --destdir of its own.

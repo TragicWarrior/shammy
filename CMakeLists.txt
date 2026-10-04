@@ -132,6 +132,13 @@ endforeach()
 set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 
 qt_add_executable(shammy ${APP_SOURCES})
+# Compile QML to bytecode only, not to C++. The C++ form links private Qt
+# symbols, which makes a Debian package depend on one exact Qt version
+# (qt6-*-private-abi) and get removed by the next Qt or release upgrade.
+# Only newer Qt tags those symbols; older builds are left as they were.
+if(Qt6_VERSION VERSION_GREATER_EQUAL 6.5)
+    set_target_properties(shammy PROPERTIES QT_QMLCACHEGEN_ARGUMENTS "--only-bytecode")
+endif()
 qt_add_qml_module(shammy
     URI Shammy
     VERSION 1.0
