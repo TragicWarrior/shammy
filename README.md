@@ -135,6 +135,23 @@ Files added to a project are preloaded, as text, into every chat in it.
 - **Removing:** removing a file, or deleting a project, deletes its files from
   disk too. Only Shammy's own project folder is ever touched.
 
+## Attachments
+
+Files attached to a chat message go in as text by the same rules as project
+files: text files as they are; Word, OpenDocument, spreadsheet and PDF files
+converted with LibreOffice/OpenOffice or `pdftotext` while those are found, and
+refused with what to install otherwise. Images go to models with vision.
+
+- **Conversion** starts as soon as a file is attached and runs in the
+  background. The chip shows "converting…", and the message can be sent once it
+  is done. A file that cannot be read is dropped then, with the reason, before
+  anything is sent.
+- **Size:** the attachments of one message share the same budget as project
+  files: 40% of the answering model's context window, never more than 256 KB,
+  and one file at most half of that. Anything cut short or left out is marked
+  in the message. A model with a big window therefore gets more of a large file
+  than one with a small window.
+
 ## Web tools
 
 With **Tools** on for a model, it can call `web_fetch` to read a page and,

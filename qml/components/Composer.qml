@@ -34,10 +34,8 @@ Rectangle {
         input.text = "/" + cmd.name + (needsSpace ? " " : "")
         chat.composerText = input.text
         input.cursorPosition = input.text.length
-        if (sendNow) {
-            chat.send()
+        if (sendNow && chat.send())
             input.text = ""
-        }
         slashMenu.close()
     }
 
@@ -335,8 +333,10 @@ Rectangle {
                         if (chat.compacting)
                             return
                         chat.composerText = input.text
-                        chat.send()
-                        input.text = ""
+                        // Only clear what was typed once it has really gone out: not
+                        // while a reply is streaming or attachments are converting.
+                        if (chat.send())
+                            input.text = ""
                     }
                 }
                 onTextChanged: {
@@ -473,6 +473,7 @@ Rectangle {
                     if (chat.streaming || chat.compacting)
                         return Theme.sendBg
                     return (input.text.trim().length > 0 || chat.pendingAttachments.length > 0)
+                           && !chat.attachmentsBusy
                            ? Theme.sendBg : Theme.sendDisabled
                 }
                 Text {
@@ -490,8 +491,8 @@ Rectangle {
                             chat.stop()
                         else {
                             chat.composerText = input.text
-                            chat.send()
-                            input.text = ""
+                            if (chat.send())
+                                input.text = ""
                         }
                     }
                 }

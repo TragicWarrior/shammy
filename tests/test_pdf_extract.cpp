@@ -1,3 +1,4 @@
+#include "FakeTools.h"
 #include "artifacts/DocxExport.h"
 #include "artifacts/PdfExtract.h"
 
@@ -16,26 +17,6 @@
 
 namespace
 {
-// A stand-in for pdftotext. What it does depends on the PDF's file name.
-const char *kFakePdftotext = R"(#!/bin/sh
-orig="$*"; file=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -enc) shift ;;
-    -layout|-) ;;
-    *) file="$1" ;;
-  esac
-  shift
-done
-case "$file" in
-  *locked*) echo "Command Line Error: Incorrect password" >&2; exit 1 ;;
-  *scanned*) exit 0 ;;
-  *args*) echo "$orig"; exit 0 ;;
-  *huge*) yes "lorem ipsum dolor sit amet lorem ipsum" | head -c 6000000; exit 0 ;;
-  *endless*) exec yes "lorem ipsum dolor sit amet lorem ipsum" ;;
-esac
-printf 'Quarterly Report\n\n\n\nNorth   120 135\f\nSecond page text\n'
-)";
 } // namespace
 
 class TestPdfExtract : public QObject
@@ -61,11 +42,7 @@ private slots:
             QSKIP("needs /bin/sh for the stand-in pdftotext");
         QVERIFY(m_dir.isValid());
         m_fake = m_dir.filePath(QStringLiteral("pdftotext"));
-        QFile f(m_fake);
-        QVERIFY(f.open(QIODevice::WriteOnly));
-        f.write(kFakePdftotext);
-        f.close();
-        QVERIFY(QFile::setPermissions(m_fake, QFile::permissions(m_fake) | QFileDevice::ExeOwner));
+        QVERIFY(FakeTools::install(m_fake, FakeTools::pdftotext));
     }
 
     void isPdfPath()

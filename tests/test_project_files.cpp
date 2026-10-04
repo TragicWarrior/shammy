@@ -1,3 +1,4 @@
+#include "FakeTools.h"
 #include "Util.h"
 #include "artifacts/DocxExport.h"
 #include "artifacts/PdfExtract.h"
@@ -37,49 +38,8 @@ bool waitFor(Pred pred, int ms = 15000)
     return true;
 }
 
-// A stand-in for LibreOffice's `soffice`: it understands just the arguments the
-// converters pass and writes the HTML they read back. A file whose name contains
-// "broken" fails; one containing "slow" takes a second.
-const char *kFakeSoffice = R"(#!/bin/sh
-out=""; conv=""; last=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --convert-to) conv="$2"; shift ;;
-    --outdir) out="$2"; shift ;;
-    -env:*|--*) ;;
-    *) last="$1" ;;
-  esac
-  shift
-done
-case "$last" in *broken*) echo "conversion exploded" >&2; exit 1 ;; esac
-case "$last" in *slow*) sleep 1 ;; esac
-base=$(basename "$last"); stem="${base%.*}"
-case "$conv" in
-  *StarCalc*)
-    printf '%s' '<html><body><h1>Sheet 1: <em>Data</em></h1><table><tr><td>name</td><td>qty</td></tr><tr><td>apple</td><td>3</td></tr></table><h1>Sheet 2: <em>Data</em></h1><table><tr><td>x</td></tr></table></body></html>' > "$out/$stem.html" ;;
-  *)
-    printf '%s' '<html><body><p>Hello from the document</p><p>Second paragraph</p></body></html>' > "$out/$stem.html" ;;
-esac
-)";
 
 
-// A stand-in for pdftotext: "locked" files fail, "scanned" ones have no text.
-const char *kFakePdftotext = R"(#!/bin/sh
-file=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -enc) shift ;;
-    -layout|-) ;;
-    *) file="$1" ;;
-  esac
-  shift
-done
-case "$file" in
-  *locked*) echo "Command Line Error: Incorrect password" >&2; exit 1 ;;
-  *scanned*) exit 0 ;;
-esac
-printf 'Quarterly Report\n\n\n\nNorth   120 135\f\nSecond page text\n'
-)";
 
 } // namespace
 
@@ -143,17 +103,9 @@ private slots:
         QCoreApplication::setApplicationName(QStringLiteral("shammy-files-test"));
         QVERIFY(ProjectController::projectsRoot().startsWith(m_root.path()));
         m_fakeOffice = m_root.filePath(QStringLiteral("fake-soffice"));
-        QFile f(m_fakeOffice);
-        QVERIFY(f.open(QIODevice::WriteOnly));
-        f.write(kFakeSoffice);
-        f.close();
-        QVERIFY(QFile::setPermissions(m_fakeOffice, QFile::permissions(m_fakeOffice) | QFileDevice::ExeOwner));
+        QVERIFY(FakeTools::install(m_fakeOffice, FakeTools::soffice));
         m_fakePdf = m_root.filePath(QStringLiteral("fake-pdftotext"));
-        QFile p(m_fakePdf);
-        QVERIFY(p.open(QIODevice::WriteOnly));
-        p.write(kFakePdftotext);
-        p.close();
-        QVERIFY(QFile::setPermissions(m_fakePdf, QFile::permissions(m_fakePdf) | QFileDevice::ExeOwner));
+        QVERIFY(FakeTools::install(m_fakePdf, FakeTools::pdftotext));
     }
 
     void init()

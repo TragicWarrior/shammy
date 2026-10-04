@@ -3,37 +3,28 @@
 #include "artifacts/Attach.h"
 #include "artifacts/SpreadsheetExtract.h"
 
-#include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QMimeDatabase>
-#include <QPointer>
 #include <QSaveFile>
 #include <QSettings>
 #include <QStandardPaths>
-#include <QThread>
 #include <QUrl>
 
 // Project instructions and files ride along with every chat, so they may use a
-// share of the model's context window and no more: a prompt that overflows the
-// window is cut from the front by the server, which drops the system prompt.
-static constexpr int kContextSharePercent = 40; // of the window, leaving room to talk
-static constexpr int kBytesPerToken = 4;
-static constexpr qint64 kMaxBudgetBytes = 256 * 1024;
-static constexpr qint64 kMinBudgetBytes = 2 * 1024;
-static constexpr qint64 kMinPerFileBytes = 32 * 1024;
-
+// share of the model's context window and no more (FileImport::budgetBytes): a
+// prompt that overflows the window is cut from the front by the server, which
+// drops the system prompt.
 qint64 ProjectController::preloadBudgetBytes(int contextTokens)
 {
-    const qint64 share = qint64(qMax(0, contextTokens)) * kBytesPerToken * kContextSharePercent / 100;
-    return qBound(kMinBudgetBytes, share, kMaxBudgetBytes);
+    return FileImport::budgetBytes(contextTokens);
 }
 
 qint64 ProjectController::perFileLimitBytes(qint64 budgetBytes)
 {
-    return qMin(budgetBytes, qMax(kMinPerFileBytes, budgetBytes / 2));
+    return FileImport::perFileLimitBytes(budgetBytes);
 }
 
 static QString formatBytes(qint64 n)
@@ -50,24 +41,6 @@ static QString formatTokens(int n)
     if (n >= 1024)
         return QString::number(n / 1024) + QLatin1Char('K');
     return QString::number(n);
-}
-
-// Cutting UTF-8 at a byte count can leave half a character at the end.
-static void trimToUtf8Boundary(QByteArray &b)
-{
-    int i = b.size();
-    int continuation = 0;
-    while (i > 0 && continuation < 4 && (static_cast<uchar>(b.at(i - 1)) & 0xC0) == 0x80)
-    {
-        --i;
-        ++continuation;
-    }
-    if (i == 0)
-        return;
-    const uchar lead = static_cast<uchar>(b.at(i - 1));
-    const int need = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
-    if (need > 1 && continuation + 1 < need)
-        b.truncate(i - 1);
 }
 
 ProjectController::ProjectController(Store *store, QObject *parent)
@@ -297,7 +270,7 @@ QString ProjectController::fileBudgetNote() const
     return QStringLiteral("Each chat gets at most %1 of instructions and files: %2% of the selected model's %3-token "
                           "context, so there is room left to talk. Anything over is cut; everything stays saved here.")
         .arg(formatBytes(preloadBudgetBytes()))
-        .arg(kContextSharePercent)
+        .arg(FileImport::kContextSharePercent)
         .arg(formatTokens(m_contextTokens));
 }
 
@@ -422,11 +395,13 @@ void ProjectController::addFile(const QString &urlOrPath)
         return;
     }
     // Project files are preloaded as text: decide now what this one can become.
-    const FileImport::Classification c =
-        FileImport::classify(path, QSettings().value(QStringLiteral("pdftotextBinaryPath")).toString());
+    const FileImport::Classification c = FileImport::classify(path, fileTools());
     if (c.plan == FileImport::Plan::Refuse)
     {
-        appendFilesError(c.refusal);
+        appendFilesError(QStringLiteral("Can't add `%1`: %2")
+                             .arg(name, c.kind == Attach::Kind::Image
+                                            ? QStringLiteral("project files are preloaded as text, so images can't be added.")
+                                            : c.reason));
         return;
     }
     if (c.plan == FileImport::Plan::Copy)
@@ -438,33 +413,29 @@ void ProjectController::addFile(const QString &urlOrPath)
     startConversion(m_currentId, path);
 }
 
-// Word and spreadsheet files go through LibreOffice, which can take a while:
-// do it on a thread, and store the result when it comes back.
-void ProjectController::startConversion(const QString &projectId, const QString &path)
+FileImport::Tools ProjectController::fileTools()
 {
-    const QString office = QSettings().value(QStringLiteral("officeBinaryPath")).toString();
-    const QString pdftotext = QSettings().value(QStringLiteral("pdftotextBinaryPath")).toString();
-    ++m_busy;
-    emit filesBusyChanged();
-    QPointer<ProjectController> self(this);
-    QThread *thread = QThread::create([self, projectId, path, office, pdftotext]()
-    {
-        const FileImport::Result result = FileImport::convert(path, office, pdftotext);
-        // Back on the main thread, where it is safe to look at `self`.
-        QMetaObject::invokeMethod(
-            qApp,
-            [self, projectId, result]()
-            {
-                if (self)
-                    self->finishConversion(projectId, result);
-            },
-            Qt::QueuedConnection);
-    });
-    QObject::connect(thread, &QThread::finished, thread, &QObject::deleteLater);
-    thread->start();
+    const QSettings s;
+    return {s.value(QStringLiteral("officeBinaryPath")).toString(),
+            s.value(QStringLiteral("pdftotextBinaryPath")).toString()};
 }
 
-void ProjectController::finishConversion(const QString &projectId, const FileImport::Result &result)
+// Word, spreadsheet and PDF files go through LibreOffice or pdftotext, which can
+// take a while: do it on a thread, and store the result when it comes back.
+void ProjectController::startConversion(const QString &projectId, const QString &path)
+{
+    ++m_busy;
+    emit filesBusyChanged();
+    const QString name = QFileInfo(path).fileName();
+    FileImport::convertInBackground(path, fileTools(), this,
+                                    [this, projectId, name](const FileImport::Result &result)
+                                    {
+                                        finishConversion(projectId, name, result);
+                                    });
+}
+
+void ProjectController::finishConversion(const QString &projectId, const QString &name,
+                                         const FileImport::Result &result)
 {
     if (m_busy > 0)
         --m_busy;
@@ -474,7 +445,7 @@ void ProjectController::finishConversion(const QString &projectId, const FileImp
         return;
     if (!result.error.isEmpty())
     {
-        appendFilesError(result.error);
+        appendFilesError(QStringLiteral("Can't add `%1`: %2").arg(name, result.error));
         return;
     }
     for (const FileImport::Item &item : result.items)
@@ -635,16 +606,7 @@ QString ProjectController::projectContextFor(const QString &projectId, int conte
             leftOut << f.filename;
             continue;
         }
-        bool cut = data.size() > perFile;
-        if (cut)
-            data.truncate(perFile);
-        if (data.size() > remaining)
-        {
-            data.truncate(remaining);
-            cut = true;
-        }
-        if (cut)
-            trimToUtf8Boundary(data);
+        const bool cut = FileImport::cutToFit(data, qMin(perFile, remaining));
         remaining -= data.size();
         out += QStringLiteral("\n## %1\n```\n").arg(f.filename);
         out += QString::fromUtf8(data);

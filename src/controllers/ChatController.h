@@ -9,6 +9,7 @@
 #include "openai/ChatTypes.h"
 #include "openai/OpenAiClient.h"
 #include "persist/Store.h"
+#include "artifacts/FileImport.h"
 #include "compact/Compactor.h"
 #include "websearch/WebSearch.h"
 
@@ -42,6 +43,9 @@ class ChatController : public QObject
     Q_PROPERTY(QString composerText READ composerText WRITE setComposerText NOTIFY composerTextChanged)
     Q_PROPERTY(QString replyQuote READ replyQuote NOTIFY replyQuoteChanged)
     Q_PROPERTY(QStringList pendingAttachments READ pendingAttachments NOTIFY pendingAttachmentsChanged)
+    // True while an attached Word, spreadsheet or PDF file is still being turned
+    // into text; the message can be sent once it is done.
+    Q_PROPERTY(bool attachmentsBusy READ attachmentsBusy NOTIFY pendingAttachmentsChanged)
     Q_PROPERTY(bool fileDropHover READ fileDropHover NOTIFY fileDropHoverChanged)
     Q_PROPERTY(bool artifactPaneOpen READ artifactPaneOpen WRITE setArtifactPaneOpen NOTIFY artifactPaneOpenChanged)
     Q_PROPERTY(int currentArtifactIndex READ currentArtifactIndex WRITE setCurrentArtifactIndex NOTIFY currentArtifactIndexChanged)
@@ -97,6 +101,7 @@ public:
     void setComposerText(const QString &t);
     QString replyQuote() const { return m_replyQuote; }
     QStringList pendingAttachments() const;
+    bool attachmentsBusy() const;
     bool fileDropHover() const { return m_fileDropHover; }
     bool artifactPaneOpen() const { return m_artifactPaneOpen; }
     void setArtifactPaneOpen(bool v);
@@ -137,7 +142,10 @@ public:
     Q_INVOKABLE void newPrivateChat();
     Q_INVOKABLE void startProjectChat(const QString &text);
     Q_INVOKABLE void openConversation(const QString &id);
-    Q_INVOKABLE void send();
+    // Sends the composer text and attachments. Returns false when nothing was
+    // sent (a reply is still streaming, attachments are still converting, or
+    // there is nothing to send), so the composer keeps what was typed.
+    Q_INVOKABLE bool send();
     Q_INVOKABLE void stop();
     Q_INVOKABLE void regenerate();
     Q_INVOKABLE void editAndResend(const QString &messageId, const QString &newText);
@@ -269,12 +277,21 @@ private:
             Image,
             Paste
         } type = File;
+        quint64 id = 0;
         QString label;
         QString rest;
         QString path;
         ContentPart image;
         QString paste;
+        // Word, spreadsheet and PDF files are converted as soon as they are
+        // attached, off the UI thread; sending waits until `converting` clears.
+        Attach::Kind kind = Attach::Kind::Text;
+        bool converting = false;
+        QList<FileImport::Item> converted;
     };
+    FileImport::Tools fileTools() const;
+    void finishAttachConversion(quint64 id, const FileImport::Result &result);
+    QString attachmentsText(QVector<ContentPart> *images) const;
 
     Store *m_store = nullptr;
     OpenAiClient *m_client = nullptr;
@@ -295,6 +312,7 @@ private:
     QString m_composer;
     QString m_replyQuote;
     QVector<PendingAttach> m_pending;
+    quint64 m_attachSeq = 0;
     bool m_fileDropHover = false;
     QString m_errorBanner;
     bool m_streaming = false;
