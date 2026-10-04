@@ -48,6 +48,13 @@ public:
     void deleteMessages(const QStringList &ids);
     void deleteMessagesFrom(const QString &conversationId, qint64 fromCreatedAt);
     void deleteMessagesForConversation(const QString &conversationId);
+    // For imports that may be repeated. Adds or refreshes `msgs` in the chat and
+    // marks them with `source`; removes messages carrying that mark that are no
+    // longer among them; leaves every other message in the chat alone. One
+    // transaction, one change signal.
+    void mergeImportedMessages(const QString &conversationId, const QList<Message> &msgs, const QString &source);
+    // The chat that already holds one of these messages, if any.
+    QString conversationHoldingAnyMessage(const QStringList &messageIds) const;
 
     QList<Artifact> artifactsForConversation(const QString &conversationId) const;
     QList<Artifact> artifactsForIdentifier(const QString &conversationId, const QString &identifier) const;

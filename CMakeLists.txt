@@ -63,6 +63,8 @@ set(CORE_SOURCES
     src/mcp/McpConfig.h
     src/compact/Compactor.cpp
     src/compact/Compactor.h
+    src/import/ClaudeChatMerge.cpp
+    src/import/ClaudeChatMerge.h
     src/websearch/WebSearch.cpp
     src/websearch/WebSearch.h
     src/Util.h

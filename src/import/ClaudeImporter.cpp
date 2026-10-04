@@ -1,4 +1,5 @@
 #include "import/ClaudeImporter.h"
+#include "import/ClaudeChatMerge.h"
 #include "import/ClaudeCookies.h"
 #include "controllers/ProjectController.h"
 #include "controllers/SettingsController.h"
@@ -23,51 +24,6 @@ ClaudeImporter::ClaudeImporter(ProjectController *projects, Store *store, Settin
     , m_store(store)
     , m_settings(settings)
 {
-}
-
-static qint64 parseIsoMs(const QString &s)
-{
-    QDateTime dt = QDateTime::fromString(s, Qt::ISODateWithMs);
-    if (!dt.isValid())
-        dt = QDateTime::fromString(s, Qt::ISODate);
-    if (!dt.isValid())
-        return nowMs();
-    return dt.toUTC().toMSecsSinceEpoch();
-}
-
-static void extractParts(const QJsonObject &msg, QString *text, QString *reasoning)
-{
-    const QJsonValue content = msg.value(QStringLiteral("content"));
-    if (content.isArray())
-    {
-        for (const QJsonValue &v : content.toArray())
-        {
-            const QJsonObject p = v.toObject();
-            const QString type = p.value(QStringLiteral("type")).toString();
-            if (type == QLatin1String("thinking"))
-            {
-                const QString t = p.value(QStringLiteral("thinking")).toString();
-                if (!t.isEmpty())
-                {
-                    if (!reasoning->isEmpty())
-                        *reasoning += QLatin1Char('\n');
-                    *reasoning += t;
-                }
-            }
-            else if (type == QLatin1String("text") || type.isEmpty())
-            {
-                const QString t = p.value(QStringLiteral("text")).toString();
-                if (!t.isEmpty())
-                {
-                    if (!text->isEmpty())
-                        *text += QLatin1Char('\n');
-                    *text += t;
-                }
-            }
-        }
-    }
-    if (text->isEmpty())
-        *text = msg.value(QStringLiteral("text")).toString();
 }
 
 void ClaudeImporter::setBusy(bool v)
@@ -107,6 +63,12 @@ void ClaudeImporter::getJson(const QString &path, const std::function<void(QJson
     const QUrl url(QStringLiteral("https://claude.ai") + path);
     QNetworkRequest req(url);
     req.setRawHeader("Cookie", m_session.cookieHeader.toUtf8());
+    // Send exactly these cookies, every time. Left to itself Qt keeps the cookies
+    // a reply sets (Claude's first reply sets one) and from then on sends those
+    // in place of this header, which drops the session and gets "Invalid
+    // authorization" for every request after the first.
+    req.setAttribute(QNetworkRequest::CookieLoadControlAttribute, QNetworkRequest::Manual);
+    req.setAttribute(QNetworkRequest::CookieSaveControlAttribute, QNetworkRequest::Manual);
     req.setRawHeader("User-Agent", kUserAgent);
     req.setRawHeader("Accept", "application/json");
     req.setRawHeader("Origin", "https://claude.ai");
@@ -237,67 +199,17 @@ void ClaudeImporter::importNextChat()
     setStatus(QStringLiteral("Importing chats %1/%2…")
                   .arg(m_importChats + 1)
                   .arg(m_importChatTotal));
-    const QString path = QStringLiteral("/api/organizations/%1/chat_conversations/%2?rendering_mode=messages")
+    // render_all_tools: without it Claude replaces each tool call with "This block
+    // is not supported on your current device yet."
+    const QString path = QStringLiteral("/api/organizations/%1/chat_conversations/%2?rendering_mode=messages&render_all_tools=true")
                              .arg(m_session.orgId, uuid);
     getJson(path, [this, meta](const QJsonDocument &doc, const QString &err)
     {
         if (err.isEmpty() && doc.isObject() && m_store)
         {
-            const QJsonObject o = doc.object();
-            Conversation c;
-            c.title = o.value(QStringLiteral("name")).toString();
-            if (c.title.isEmpty())
-                c.title = meta.value(QStringLiteral("name")).toString();
-            if (c.title.isEmpty())
-                c.title = QStringLiteral("Imported chat");
-            const QString claudeId = o.value(QStringLiteral("uuid")).toString();
-            c.id = claudeId;
-            if (m_store->conversation(claudeId).id.isEmpty())
-            {
-                for (const Conversation &existing : m_store->conversations(m_importLocalId))
-                {
-                    if (existing.title == c.title)
-                    {
-                        c.id = existing.id;
-                        break;
-                    }
-                }
-            }
-            c.projectId = m_importLocalId;
-            if (m_settings)
-                c.model = m_settings->currentModel();
-            c.pinned = o.value(QStringLiteral("is_starred")).toBool()
-                || meta.value(QStringLiteral("is_starred")).toBool();
-            c.createdAt = parseIsoMs(o.value(QStringLiteral("created_at")).toString());
-            c.updatedAt = parseIsoMs(o.value(QStringLiteral("updated_at")).toString());
-            m_store->upsertConversation(c);
-            m_store->deleteMessagesForConversation(c.id);
-            const QJsonArray msgs = o.value(QStringLiteral("chat_messages")).toArray();
-            int i = 0;
-            for (const QJsonValue &mv : msgs)
-            {
-                const QJsonObject mo = mv.toObject();
-                const QString sender = mo.value(QStringLiteral("sender")).toString();
-                Message m;
-                m.id = mo.value(QStringLiteral("uuid")).toString();
-                if (m.id.isEmpty())
-                    m.id = newId();
-                m.conversationId = c.id;
-                if (sender == QLatin1String("human"))
-                    m.role = QStringLiteral("user");
-                else if (sender == QLatin1String("assistant"))
-                    m.role = QStringLiteral("assistant");
-                else
-                    continue;
-                extractParts(mo, &m.content, &m.reasoning);
-                if (m.content.isEmpty() && m.reasoning.isEmpty())
-                    continue;
-                m.createdAt = parseIsoMs(mo.value(QStringLiteral("created_at")).toString());
-                if (!m.createdAt)
-                    m.createdAt = c.createdAt + i;
-                m_store->upsertMessage(m);
-                ++i;
-            }
+            // Safe to repeat: updates what came from Claude, keeps what was added here.
+            ClaudeChatMerge::merge(m_store, m_importLocalId, m_settings ? m_settings->currentModel() : QString(),
+                                   doc.object(), meta);
             ++m_importChats;
         }
         importNextChat();
