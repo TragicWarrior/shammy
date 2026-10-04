@@ -23,6 +23,7 @@ shammy_test(test_attach)
 shammy_test(test_mcp_client)
 shammy_test(test_web_fetch)
 shammy_test(test_pdf_extract)
+shammy_test(test_claude_import)
 
 # Controller-level tests: the controllers and list models live in the app target
 # (next to the QML module), so build the few they need directly into each test.

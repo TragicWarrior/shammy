@@ -213,6 +213,9 @@ bool Store::migrate()
 
     if (!tableHasColumn(m_db, QStringLiteral("conversations"), QStringLiteral("reasoning_effort")))
         exec(QStringLiteral("ALTER TABLE conversations ADD COLUMN reasoning_effort TEXT"));
+    // Where a message came from when it was not written here ("claude"); NULL otherwise.
+    if (!tableHasColumn(m_db, QStringLiteral("messages"), QStringLiteral("source")))
+        exec(QStringLiteral("ALTER TABLE messages ADD COLUMN source TEXT"));
 
     m_fts = exec(QStringLiteral(
         "CREATE VIRTUAL TABLE IF NOT EXISTS search_idx USING fts5("
@@ -681,6 +684,80 @@ void Store::deleteMessagesForConversation(const QString &conversationId)
     q.prepare(QStringLiteral("DELETE FROM messages WHERE conversation_id = ?"));
     q.addBindValue(conversationId);
     q.exec();
+    reindexConversation(conversationId);
+    emit messagesChanged(conversationId);
+}
+
+QString Store::conversationHoldingAnyMessage(const QStringList &messageIds) const
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT conversation_id FROM messages WHERE id = ?"));
+    for (const QString &id : messageIds)
+    {
+        if (id.isEmpty())
+            continue;
+        q.addBindValue(id);
+        if (q.exec() && q.next())
+        {
+            const QString conv = q.value(0).toString();
+            if (!conv.isEmpty())
+                return conv;
+        }
+        q.finish();
+    }
+    return {};
+}
+
+void Store::mergeImportedMessages(const QString &conversationId, const QList<Message> &msgs, const QString &source)
+{
+    if (conversationId.isEmpty() || source.isEmpty())
+        return;
+    m_db.transaction();
+    QSet<QString> incoming;
+    QSqlQuery up(m_db);
+    up.prepare(QStringLiteral(
+        "INSERT INTO messages(id,conversation_id,role,content,reasoning,tool_calls_json,tool_call_id,created_at,source) "
+        "VALUES(?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(id) DO UPDATE SET conversation_id=excluded.conversation_id, role=excluded.role, "
+        "content=excluded.content, reasoning=excluded.reasoning, created_at=excluded.created_at, "
+        "source=excluded.source"));
+    for (const Message &m : msgs)
+    {
+        if (m.id.isEmpty())
+            continue;
+        incoming.insert(m.id);
+        up.addBindValue(m.id);
+        up.addBindValue(conversationId);
+        up.addBindValue(m.role);
+        up.addBindValue(m.content);
+        up.addBindValue(m.reasoning);
+        up.addBindValue(m.toolCallsJson);
+        up.addBindValue(m.toolCallId);
+        up.addBindValue(m.createdAt ? m.createdAt : nowMs());
+        up.addBindValue(source);
+        up.exec();
+    }
+    // Messages from an earlier import that the source no longer has.
+    QStringList stale;
+    QSqlQuery sel(m_db);
+    sel.prepare(QStringLiteral("SELECT id FROM messages WHERE conversation_id = ? AND source = ?"));
+    sel.addBindValue(conversationId);
+    sel.addBindValue(source);
+    sel.exec();
+    while (sel.next())
+    {
+        const QString id = sel.value(0).toString();
+        if (!incoming.contains(id))
+            stale << id;
+    }
+    QSqlQuery del(m_db);
+    del.prepare(QStringLiteral("DELETE FROM messages WHERE id = ?"));
+    for (const QString &id : stale)
+    {
+        del.addBindValue(id);
+        del.exec();
+    }
+    m_db.commit();
     reindexConversation(conversationId);
     emit messagesChanged(conversationId);
 }
