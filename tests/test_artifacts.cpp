@@ -3,6 +3,8 @@
 #include "artifacts/ContentSplitter.h"
 #include "artifacts/HtmlDocument.h"
 
+#include <QTextBlock>
+#include <QTextDocument>
 #include <QtTest>
 
 class TestArtifacts : public QObject
@@ -182,6 +184,65 @@ private slots:
         QVERIFY(HtmlDocument::isMarkdownType(QStringLiteral("markdown")));
         QVERIFY(HtmlDocument::isCompleteDocument(QStringLiteral("<!DOCTYPE html><html></html>")));
         QVERIFY(!HtmlDocument::isCompleteDocument(QStringLiteral("<h1>nope</h1>")));
+    }
+
+    // -- a single "~" must not start a strike-through ----------------------------
+
+    static QString struck(const QString &markdown)
+    {
+        QTextDocument d;
+        d.setMarkdown(markdown);
+        QString out;
+        for (QTextBlock b = d.begin(); b.isValid(); b = b.next())
+            for (auto it = b.begin(); !it.atEnd(); ++it)
+                if (it.fragment().charFormat().fontStrikeOut())
+                    out += it.fragment().text();
+        return out;
+    }
+    static QString shown(const QString &markdown)
+    {
+        QTextDocument d;
+        d.setMarkdown(markdown);
+        return d.toPlainText();
+    }
+
+    void aboutFiguresAreNotStruckThrough()
+    {
+        const QString reply = QStringLiteral("pack voltage (~53 V), so it shifts: roughly 16 mA near the bottom (~50 V) and about 14 mA near full (~57 V).");
+        // What went wrong: the renderer pairs the first two tildes.
+        QVERIFY(!struck(reply).isEmpty());
+        const QString fixed = ContentSplitter::escapeLoneTildes(reply);
+        QCOMPARE(struck(fixed), QString());
+        QCOMPARE(shown(fixed), reply); // reads exactly as written, tildes and all
+    }
+
+    void realStrikeThroughStillWorks()
+    {
+        const QString fixed = ContentSplitter::escapeLoneTildes(QStringLiteral("keep ~~this~~ but not ~5 V or ~6 V"));
+        QCOMPARE(struck(fixed), QStringLiteral("this"));
+        QCOMPARE(shown(fixed), QStringLiteral("keep this but not ~5 V or ~6 V"));
+    }
+
+    void tildesInCodeAndAddressesAreLeftAlone()
+    {
+        QCOMPARE(ContentSplitter::escapeLoneTildes(QStringLiteral("run `cd ~/src` then `ls ~`")), QStringLiteral("run `cd ~/src` then `ls ~`"));
+        QCOMPARE(ContentSplitter::escapeLoneTildes(QStringLiteral("``a ~ b`` and ~c")), QStringLiteral("``a ~ b`` and \\~c"));
+        QCOMPARE(ContentSplitter::escapeLoneTildes(QStringLiteral("see https://example.org/~user/page and www.x.org/~u")),
+                 QStringLiteral("see https://example.org/~user/page and www.x.org/~u"));
+        // The code span shows its tilde with no backslash.
+        QCOMPARE(shown(ContentSplitter::escapeLoneTildes(QStringLiteral("home is `~` and about ~3 m, ~4 m"))),
+                 QStringLiteral("home is ~ and about ~3 m, ~4 m"));
+    }
+
+    void otherTildeFormsAreUntouched()
+    {
+        QCOMPARE(ContentSplitter::escapeLoneTildes(QStringLiteral("no tildes here")), QStringLiteral("no tildes here"));
+        QCOMPARE(ContentSplitter::escapeLoneTildes(QString()), QString());
+        QCOMPARE(ContentSplitter::escapeLoneTildes(QStringLiteral("already \\~ escaped")), QStringLiteral("already \\~ escaped"));
+        QCOMPARE(ContentSplitter::escapeLoneTildes(QStringLiteral("~~~\nfenced\n~~~")), QStringLiteral("~~~\nfenced\n~~~"));
+        QCOMPARE(ContentSplitter::escapeLoneTildes(QStringLiteral("~")), QStringLiteral("\\~"));
+        QCOMPARE(ContentSplitter::escapeLoneTildes(QStringLiteral("a~b~c")), QStringLiteral("a\\~b\\~c"));
+        QCOMPARE(ContentSplitter::escapeLoneTildes(QStringLiteral("open `code and ~x")), QStringLiteral("open `code and \\~x"));
     }
 };
 

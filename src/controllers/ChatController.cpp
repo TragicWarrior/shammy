@@ -1553,6 +1553,11 @@ QVector<ChatMessage> ChatController::apiHistory() const
         }
         if (m.streaming && m.content.isEmpty() && m.toolCallsJson.isEmpty())
             continue;
+        // An assistant turn with no text and no tool calls says nothing to the
+        // model (a reply that was only reasoning, or a blank one saved by an
+        // older version); some backends reject it.
+        if (m.role == QLatin1String("assistant") && m.content.trimmed().isEmpty() && m.toolCallsJson.isEmpty())
+            continue;
         if (m.role == QLatin1String("tool"))
         {
             ChatMessage clipped = m;
@@ -2113,12 +2118,29 @@ void ChatController::saveCurrentArtifact(const QString &destPath)
     f.write(bytes);
 }
 
+// A reply with nothing in it at all: stopped, or failed, before the first token.
+static bool isEmptyReply(const ChatMessage &m)
+{
+    return m.role == QLatin1String("assistant") && m.content.trimmed().isEmpty() && m.reasoning.trimmed().isEmpty()
+        && m.toolCallsJson.isEmpty();
+}
+
+// Ends a reply that was cut short. What there is of it is kept; a reply that
+// never produced anything is dropped rather than saved as a blank message.
+void ChatController::finishInterruptedReply()
+{
+    genFinishLast();
+    if (isEmptyReply(genLast()))
+        genRemoveLast();
+    else
+        persistLastAssistant();
+}
+
 void ChatController::onFinished(const QString &reason)
 {
     if (reason == QLatin1String("aborted"))
     {
-        genFinishLast();
-        persistLastAssistant();
+        finishInterruptedReply();
         endGeneration();
         return;
     }
@@ -2190,8 +2212,7 @@ bool ChatController::shouldForceFinalWrite(const QJsonArray &leftoverCalls) cons
 
 void ChatController::onFailed(const QString &err)
 {
-    genFinishLast();
-    persistLastAssistant();
+    finishInterruptedReply();
     if (m_genAttached)
     {
         setError(err);
@@ -2218,8 +2239,7 @@ void ChatController::stop()
         return;
     }
     // Between tool rounds there is no live reply to abort; finalize directly.
-    genFinishLast();
-    persistLastAssistant();
+    finishInterruptedReply();
     endGeneration();
 }
 
@@ -2458,15 +2478,31 @@ void ChatController::dropMessagesFrom(int from)
         else
             doomed.append(all.at(i).id);
     }
+    // The artifacts those messages produced go with them; otherwise they stay
+    // listed, and the next reply's artifact is numbered as a later version.
     if (m_private)
     {
         m_messages.setMessages(kept);
+        QList<Artifact> left;
+        for (int i = 0; i < m_artifacts.rowCount(); ++i)
+        {
+            const Artifact a = m_artifacts.at(i);
+            if (!doomed.contains(a.messageId))
+                left.append(a);
+        }
+        if (left.size() != m_artifacts.rowCount())
+        {
+            applyArtifactItems(left);
+            if (left.isEmpty())
+                setArtifactPaneOpen(false);
+        }
         m_toolRounds = 0;
         m_forceFinalWrite = false;
         m_finalWriteAttempts = 0;
         refreshContextUsage();
         return;
     }
+    m_store->deleteArtifactsForMessages(doomed);
     m_store->deleteMessages(doomed);
     openConversation(m_convId);
 }

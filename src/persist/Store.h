@@ -64,6 +64,8 @@ public:
     int nextArtifactVersion(const QString &conversationId, const QString &identifier) const;
     void insertArtifact(const Artifact &a);
     void deleteArtifactsForConversation(const QString &conversationId);
+    // The artifacts that these messages produced.
+    void deleteArtifactsForMessages(const QStringList &messageIds);
 
     bool isAlwaysAllowed(const QString &server, const QString &tool) const;
     void allowAlways(const QString &server, const QString &tool);

@@ -217,6 +217,7 @@ private:
     void onFinished(const QString &reason);
     void onFailed(const QString &err);
     void persistLastAssistant();
+    void finishInterruptedReply();
     void extractArtifactsFrom(const ChatMessage &m);
     void loadArtifacts();
     void applyArtifactItems(const QList<Artifact> &items);

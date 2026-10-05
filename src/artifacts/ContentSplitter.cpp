@@ -238,3 +238,64 @@ QVector<ContentPart> ContentSplitter::split(const QString &content)
     }
     return out;
 }
+
+QString ContentSplitter::escapeLoneTildes(const QString &markdown)
+{
+    if (!markdown.contains(QLatin1Char('~')))
+        return markdown;
+    QString out;
+    out.reserve(markdown.size() + 8);
+    const int n = markdown.size();
+    int i = 0;
+    while (i < n)
+    {
+        const QChar c = markdown.at(i);
+        if (c == QLatin1Char('`'))
+        {
+            // An inline code span: copy it as it is, through its closing run.
+            int run = 0;
+            while (i + run < n && markdown.at(i + run) == QLatin1Char('`'))
+                ++run;
+            const int close = markdown.indexOf(QString(run, QLatin1Char('`')), i + run);
+            const int end = close < 0 ? i + run : close + run;
+            out += QStringView{markdown}.mid(i, end - i);
+            i = end;
+            continue;
+        }
+        if (c == QLatin1Char('\\') && i + 1 < n)
+        {
+            // Already an escape of whatever follows.
+            out += QStringView{markdown}.mid(i, 2);
+            i += 2;
+            continue;
+        }
+        if (c == QLatin1Char('~'))
+        {
+            int run = 0;
+            while (i + run < n && markdown.at(i + run) == QLatin1Char('~'))
+                ++run;
+            bool literal = run == 1;
+            if (literal)
+            {
+                // Part of a web address ("https://host/~user/")? Leave it.
+                int a = i;
+                while (a > 0 && !markdown.at(a - 1).isSpace())
+                    --a;
+                int b = i;
+                while (b < n && !markdown.at(b).isSpace())
+                    ++b;
+                const QStringView word = QStringView{markdown}.mid(a, b - a);
+                if (word.contains(QLatin1String("://")) || word.startsWith(QLatin1String("www.")))
+                    literal = false;
+            }
+            if (literal)
+                out += QLatin1Char('\\');
+            out += QStringView{markdown}.mid(i, run);
+            i += run;
+            continue;
+        }
+        out += c;
+        ++i;
+    }
+    return out;
+}
