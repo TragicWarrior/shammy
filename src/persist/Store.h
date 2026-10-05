@@ -40,7 +40,10 @@ public:
     Conversation conversation(const QString &id) const;
     void upsertConversation(const Conversation &c);
     void deleteConversation(const QString &id);
+    // Chats whose title contains the text, or whose messages contain every word
+    // of it (a word matches from its start). Pinned first, then newest.
     QList<Conversation> search(const QString &query) const;
+    static QString ftsQuery(const QString &query);
 
     QList<Message> messages(const QString &conversationId) const;
     void upsertMessage(const Message &m);

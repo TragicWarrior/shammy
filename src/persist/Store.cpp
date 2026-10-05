@@ -3,6 +3,7 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -244,6 +245,14 @@ bool Store::migrate()
         upsertBackend(llama);
         setSetting(QStringLiteral("current_backend"), ollama.id);
     }
+
+    // Every lookup below goes by one of these columns. Without an index each one
+    // reads its whole table: opening a chat read every message in the database.
+    exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at)"));
+    exec(QStringLiteral(
+        "CREATE INDEX IF NOT EXISTS idx_artifacts_conv_ident ON artifacts(conversation_id, identifier, version)"));
+    exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_conversations_project ON conversations(project_id)"));
+    exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_project_files_project ON project_files(project_id)"));
 
     deleteNullIdConversations();
     return true;
@@ -544,47 +553,68 @@ void Store::deleteConversation(const QString &id)
     emit conversationsChanged();
 }
 
+// The words of a search as an FTS5 query: every word must be present, each as
+// the start of a word ("qu" finds "quick"), and nothing in it is FTS syntax.
+QString Store::ftsQuery(const QString &query)
+{
+    QStringList terms;
+    for (QString word : query.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts))
+    {
+        word.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+        terms << QLatin1Char('"') + word + QStringLiteral("\"*");
+    }
+    return terms.join(QLatin1Char(' '));
+}
+
 QList<Conversation> Store::search(const QString &query) const
 {
-    if (query.trimmed().isEmpty())
+    const QString needle = query.trimmed();
+    if (needle.isEmpty())
         return conversations();
     QList<Conversation> out;
-    QSet<QString> seen;
-    auto takeRows = [&](QSqlQuery &q)
+    const auto take = [&out](QSqlQuery &q)
     {
         while (q.next())
         {
             const Conversation c = convFromQuery(q);
-            if (c.id.isEmpty() || seen.contains(c.id))
-            {
-                continue;
-            }
-            seen.insert(c.id);
-            out.append(c);
+            if (!c.id.isEmpty())
+                out.append(c);
         }
     };
+    // Titles are matched anywhere in the text; there are few of them.
+    QString like = needle;
+    like.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
+    like.replace(QLatin1Char('%'), QStringLiteral("\\%"));
+    like.replace(QLatin1Char('_'), QStringLiteral("\\_"));
+    like = QLatin1Char('%') + like + QLatin1Char('%');
+
     if (m_fts)
     {
-        QString qtext = query.trimmed();
-        qtext.replace('"', ' ');
+        // Message text goes through the full-text index, not a scan of every
+        // message, which was most of the cost of each keystroke.
         QSqlQuery q(m_db);
         q.prepare(QStringLiteral(
-            "SELECT c.* FROM conversations c "
-            "WHERE c.id IN (SELECT DISTINCT conversation_id FROM search_idx WHERE search_idx MATCH ?)"));
-        q.addBindValue(qtext);
+            "SELECT c.* FROM conversations c WHERE c.title LIKE ? ESCAPE '\\' "
+            "OR c.id IN (SELECT conversation_id FROM search_idx WHERE search_idx MATCH ?) "
+            "ORDER BY c.pinned DESC, c.updated_at DESC"));
+        q.addBindValue(like);
+        q.addBindValue(ftsQuery(needle));
         if (q.exec())
-            takeRows(q);
+        {
+            take(q);
+            return out;
+        }
     }
+    // No full-text index (or it refused the query): scan.
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral(
-        "SELECT DISTINCT c.* FROM conversations c LEFT JOIN messages m "
-        "ON m.conversation_id = c.id WHERE c.title LIKE ? OR m.content LIKE ? "
+        "SELECT DISTINCT c.* FROM conversations c LEFT JOIN messages m ON m.conversation_id = c.id "
+        "WHERE c.title LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\' "
         "ORDER BY c.pinned DESC, c.updated_at DESC"));
-    const QString like = QStringLiteral("%") + query.trimmed() + QStringLiteral("%");
     q.addBindValue(like);
     q.addBindValue(like);
     if (q.exec())
-        takeRows(q);
+        take(q);
     return out;
 }
 
