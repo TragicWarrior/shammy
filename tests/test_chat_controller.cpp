@@ -39,7 +39,9 @@ public:
     {
         Text,
         ToolCall,
-        Hold
+        Hold,
+        Fail,    // HTTP 500 before any token
+        Partial, // some text (or reasoning, if `tool` is "reasoning"), then silence
     };
     struct Reply
     {
@@ -56,6 +58,9 @@ public:
         return {ToolCall, {}, name, args};
     }
     static Reply hold() { return {Hold, {}, {}, {}}; }
+    static Reply fail() { return {Fail, {}, {}, {}}; }
+    static Reply partial(const QString &t) { return {Partial, t, {}, {}}; }
+    static Reply partialReasoning(const QString &t) { return {Partial, t, QStringLiteral("reasoning"), {}}; }
 
     explicit FakeOpenAi(Handler h)
         : m_handler(std::move(h))
@@ -152,6 +157,25 @@ private:
         const bool stream = o.value(QStringLiteral("stream")).toBool(true);
         if (r.kind == Hold)
         {
+            m_held.append({s, stream});
+            return;
+        }
+        if (r.kind == Fail)
+        {
+            const QByteArray body = "{\"error\":{\"message\":\"model exploded\"}}";
+            s->write("HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "
+                     + QByteArray::number(body.size()) + "\r\n\r\n" + body);
+            s->flush();
+            s->disconnectFromHost();
+            return;
+        }
+        if (r.kind == Partial)
+        {
+            const QString field = r.tool == QLatin1String("reasoning") ? QStringLiteral("reasoning_content") : QStringLiteral("content");
+            s->write("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n"
+                     + sse({{QStringLiteral("choices"),
+                             QJsonArray{QJsonObject{{QStringLiteral("delta"), QJsonObject{{field, r.text}}}}}}}));
+            s->flush();
             m_held.append({s, stream});
             return;
         }
@@ -693,6 +717,213 @@ private slots:
         QVERIFY(QFile::remove(path));
         QVERIFY(f.say(QStringLiteral("read it")));
         QVERIFY(userTexts(f.ai.requests.last()).last().contains(QLatin1String("Attached file `gone.txt` could not be read")));
+    }
+
+    // -- display: "~" figures in a reply are not struck through -------------------
+
+    void replyTextIsPreparedForMarkdownButTheUsersIsNot()
+    {
+        Fixture f([](int, const QJsonObject &) { return FakeOpenAi::text(QStringLiteral("about ~50 V to ~57 V\n```\nls ~\n```")); });
+        QVERIFY(f.ok);
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("is it ~50 or ~57?")));
+        MessageListModel *m = f.chat->messages();
+        const auto parts = [&](int row) { return m->data(m->index(row), MessageListModel::PartsRole).toList(); };
+        // The user's message is shown as typed.
+        QCOMPARE(parts(0).first().toMap().value(QStringLiteral("text")).toString(), QStringLiteral("is it ~50 or ~57?"));
+        // The reply's text goes to the Markdown renderer with its tildes protected; its code does not.
+        const QVariantList reply = parts(1);
+        QCOMPARE(reply.size(), 2);
+        QCOMPARE(reply.at(0).toMap().value(QStringLiteral("text")).toString().trimmed(), QStringLiteral("about \\~50 V to \\~57 V"));
+        QCOMPARE(reply.at(1).toMap().value(QStringLiteral("type")).toString(), QStringLiteral("code"));
+        QCOMPARE(reply.at(1).toMap().value(QStringLiteral("text")).toString(), QStringLiteral("ls ~"));
+        // What is stored, copied and sent back to the model is unchanged.
+        QCOMPARE(m->data(m->index(1), MessageListModel::ContentRole).toString(), QStringLiteral("about ~50 V to ~57 V\n```\nls ~\n```"));
+        QCOMPARE(f.store.messages(f.chat->conversationId()).last().content, QStringLiteral("about ~50 V to ~57 V\n```\nls ~\n```"));
+    }
+
+    // -- B10: a reply that produced nothing is not kept --------------------------
+
+    void aReplyStoppedBeforeAnyTokenLeavesNoBlankMessage()
+    {
+        Fixture f([](int, const QJsonObject &) { return FakeOpenAi::hold(); });
+        QVERIFY(f.ok);
+        f.chat->newChat();
+        f.chat->setComposerText(QStringLiteral("hello"));
+        QVERIFY(f.chat->send());
+        QVERIFY(waitFor([&]() { return f.ai.requests.size() == 1; }));
+        f.chat->stop();
+        QVERIFY(!f.chat->streaming());
+        QCOMPARE(f.roles(), QStringList{QStringLiteral("user")});
+        const auto stored = f.store.messages(f.chat->conversationId());
+        QCOMPARE(stored.size(), 1);
+        QCOMPARE(stored.first().role, QStringLiteral("user"));
+    }
+
+    void aReplyThatFailsBeforeAnyTokenLeavesNoBlankMessage()
+    {
+        Fixture f([](int i, const QJsonObject &) { return i == 0 ? FakeOpenAi::fail() : FakeOpenAi::text(QStringLiteral("better")); });
+        QVERIFY(f.ok);
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("hello")));
+        QVERIFY2(f.chat->errorBanner().contains(QLatin1String("model exploded")), qPrintable(f.chat->errorBanner()));
+        QCOMPARE(f.roles(), QStringList{QStringLiteral("user")});
+        QCOMPARE(f.store.messages(f.chat->conversationId()).size(), 1);
+        // The chat carries on, and the failed turn is not sent back as an empty one.
+        QVERIFY(f.say(QStringLiteral("again")));
+        QCOMPARE(f.roles(), (QStringList{"user", "user", "assistant"}));
+        for (const QJsonValue &v : f.ai.requests.last().value(QStringLiteral("messages")).toArray())
+            QVERIFY(!(v.toObject().value(QStringLiteral("role")).toString() == QLatin1String("assistant")
+                      && v.toObject().value(QStringLiteral("content")).toString().isEmpty()));
+    }
+
+    void aReplyStoppedPartWayKeepsWhatItHad()
+    {
+        Fixture f([](int, const QJsonObject &) { return FakeOpenAi::partial(QStringLiteral("The answer starts")); });
+        QVERIFY(f.ok);
+        f.chat->newChat();
+        f.chat->setComposerText(QStringLiteral("hello"));
+        QVERIFY(f.chat->send());
+        QVERIFY(waitFor([&]() { return f.chat->messages()->all().size() == 2 && !f.chat->messages()->all().last().content.isEmpty(); }));
+        f.chat->stop();
+        const auto stored = f.store.messages(f.chat->conversationId());
+        QCOMPARE(stored.size(), 2);
+        QCOMPARE(stored.last().content, QStringLiteral("The answer starts"));
+    }
+
+    void aReplyStoppedWhileThinkingKeepsItsReasoningButIsNotSentBack()
+    {
+        Fixture f([](int i, const QJsonObject &)
+                  { return i == 0 ? FakeOpenAi::partialReasoning(QStringLiteral("let me think")) : FakeOpenAi::text(QStringLiteral("done")); });
+        QVERIFY(f.ok);
+        f.chat->newChat();
+        f.chat->setComposerText(QStringLiteral("hello"));
+        QVERIFY(f.chat->send());
+        QVERIFY(waitFor([&]() { return f.chat->messages()->all().size() == 2 && !f.chat->messages()->all().last().reasoning.isEmpty(); }));
+        f.chat->stop();
+        auto stored = f.store.messages(f.chat->conversationId());
+        QCOMPARE(stored.size(), 2); // the thinking is worth keeping to look at
+        QCOMPARE(stored.last().reasoning, QStringLiteral("let me think"));
+        QVERIFY(stored.last().content.isEmpty());
+
+        QVERIFY(f.say(QStringLiteral("go on")));
+        QStringList roles;
+        for (const QJsonValue &v : f.ai.requests.last().value(QStringLiteral("messages")).toArray())
+            roles << v.toObject().value(QStringLiteral("role")).toString();
+        QCOMPARE(roles, (QStringList{"system", "user", "user"})); // no empty assistant turn
+    }
+
+    void blankRepliesSavedByOlderVersionsAreNotSentToTheModel()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        Conversation c;
+        c.id = newId();
+        c.title = QStringLiteral("old");
+        c.createdAt = c.updatedAt = nowMs();
+        f.store.upsertConversation(c);
+        const auto add = [&](const QString &role, const QString &content, const QString &reasoning, qint64 at)
+        {
+            Message m;
+            m.id = newId();
+            m.conversationId = c.id;
+            m.role = role;
+            m.content = content;
+            m.reasoning = reasoning;
+            m.createdAt = at;
+            f.store.upsertMessage(m);
+        };
+        add(QStringLiteral("user"), QStringLiteral("q1"), {}, 1);
+        add(QStringLiteral("assistant"), QString(), QStringLiteral("only thought"), 2); // e.g. imported from Claude
+        add(QStringLiteral("user"), QStringLiteral("q2"), {}, 3);
+        add(QStringLiteral("assistant"), QStringLiteral("a2"), {}, 4);
+        f.chat->openConversation(c.id);
+        QCOMPARE(f.roles().size(), 4); // still shown
+        QVERIFY(f.say(QStringLiteral("q3")));
+        QStringList sent;
+        for (const QJsonValue &v : f.ai.requests.last().value(QStringLiteral("messages")).toArray())
+            sent << v.toObject().value(QStringLiteral("role")).toString() + QLatin1Char(':') + v.toObject().value(QStringLiteral("content")).toString().left(2);
+        sent.removeFirst(); // system
+        QCOMPARE(sent, (QStringList{"user:q1", "user:q2", "assistant:a2", "user:q3"}));
+    }
+
+    // -- B11: artifacts go with the messages that made them ----------------------
+
+    static QString artifactReply(const QString &body)
+    {
+        return QStringLiteral("Here it is.\n<artifact identifier=\"page\" type=\"text/html\" title=\"Page\">\n<!DOCTYPE html><html><body>%1</body></html>\n</artifact>").arg(body);
+    }
+
+    void regenerateReplacesTheArtifactInsteadOfStackingVersions()
+    {
+        Fixture f([](int i, const QJsonObject &) { return FakeOpenAi::text(artifactReply(QStringLiteral("draft %1").arg(i + 1))); });
+        QVERIFY(f.ok);
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("make a page")));
+        const QString conv = f.chat->conversationId();
+        QCOMPARE(f.store.artifactsForConversation(conv).size(), 1);
+
+        f.chat->regenerate();
+        QVERIFY(waitFor([&]() { return !f.chat->streaming() && f.ai.requests.size() == 2; }));
+        const auto arts = f.store.artifactsForConversation(conv);
+        QCOMPARE(arts.size(), 1); // the first draft's artifact went with its message
+        QCOMPARE(arts.first().version, 1);
+        QVERIFY(arts.first().content.contains(QLatin1String("draft 2")));
+        QCOMPARE(arts.first().messageId, f.chat->messages()->all().last().id);
+        QCOMPARE(f.chat->artifacts()->rowCount(), 1);
+    }
+
+    void editingAnEarlierMessageRemovesLaterArtifactsOnly()
+    {
+        Fixture f([](int i, const QJsonObject &)
+                  {
+                      if (i == 0)
+                          return FakeOpenAi::text(QStringLiteral("Kept.\n<artifact identifier=\"first\" type=\"text/html\" title=\"First\">\n<!DOCTYPE html><html><body>one</body></html>\n</artifact>"));
+                      return FakeOpenAi::text(artifactReply(QStringLiteral("turn %1").arg(i + 1)));
+                  });
+        QVERIFY(f.ok);
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("first")));
+        QVERIFY(f.say(QStringLiteral("second")));
+        const QString conv = f.chat->conversationId();
+        QCOMPARE(f.store.artifactsForConversation(conv).size(), 2);
+
+        const QString secondUser = f.chat->messages()->all().at(2).id;
+        f.chat->editAndResend(secondUser, QStringLiteral("second, edited"));
+        QVERIFY(waitFor([&]() { return !f.chat->streaming() && f.ai.requests.size() == 3; }));
+        QStringList got;
+        for (const Artifact &a : f.store.artifactsForConversation(conv))
+            got << QStringLiteral("%1 v%2").arg(a.identifier).arg(a.version);
+        QCOMPARE(got, (QStringList{"first v1", "page v1"}));
+    }
+
+    void privateRegenerateDropsTheOldArtifactToo()
+    {
+        // The second reply names its artifact differently, so a stale one would stay listed.
+        Fixture f([](int i, const QJsonObject &)
+                  {
+                      return FakeOpenAi::text(QStringLiteral("Here.\n<artifact identifier=\"%1\" type=\"text/html\" title=\"T\">\n<!DOCTYPE html><html><body>draft %2</body></html>\n</artifact>")
+                                                  .arg(i == 0 ? QStringLiteral("page") : QStringLiteral("other"))
+                                                  .arg(i + 1));
+                  });
+        QVERIFY(f.ok);
+        f.chat->newPrivateChat();
+        QVERIFY(f.say(QStringLiteral("make a page")));
+        QCOMPARE(f.chat->artifacts()->rowCount(), 1);
+        const QString firstReply = f.chat->messages()->all().last().id;
+        QCOMPARE(f.chat->artifactsForMessage(firstReply).size(), 1);
+
+        f.chat->regenerate();
+        QVERIFY(waitFor([&]() { return !f.chat->streaming() && f.ai.requests.size() == 2; }));
+        QCOMPARE(f.chat->artifacts()->rowCount(), 1);
+        QCOMPARE(f.chat->artifacts()->at(0).identifier, QStringLiteral("other"));
+        QCOMPARE(f.chat->artifacts()->at(0).version, 1);
+        QVERIFY(f.chat->artifactsForMessage(firstReply).isEmpty());
+        const QVariantList now = f.chat->artifactsForMessage(f.chat->messages()->all().last().id);
+        QCOMPARE(now.size(), 1);
+        QVERIFY(now.first().toMap().value(QStringLiteral("text")).toString().contains(QLatin1String("draft 2")));
+        QVERIFY(f.chat->privateSession());
+        QVERIFY(f.store.artifactsForConversation(f.chat->conversationId()).isEmpty()); // still private
     }
 
     // -- the search box waits for a pause in typing ------------------------------

@@ -254,6 +254,14 @@ bool Store::migrate()
     exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_conversations_project ON conversations(project_id)"));
     exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_project_files_project ON project_files(project_id)"));
 
+    // Replies that were stopped or failed before producing anything used to be
+    // saved as empty messages. They show as blank bubbles and went back to the
+    // model as empty turns. (A reply with only reasoning is kept.)
+    // (SQLite's TRIM takes off spaces only unless told the characters.)
+    const QString blank = QStringLiteral("TRIM(COALESCE(%1, ''), ' ' || char(9) || char(10) || char(13)) = ''");
+    exec(QStringLiteral("DELETE FROM messages WHERE role = 'assistant' AND %1 AND %2 AND COALESCE(tool_calls_json, '') = ''")
+             .arg(blank.arg(QStringLiteral("content")), blank.arg(QStringLiteral("reasoning"))));
+
     deleteNullIdConversations();
     return true;
 }
@@ -861,6 +869,31 @@ void Store::insertArtifact(const Artifact &a)
     q.addBindValue(a.createdAt ? a.createdAt : nowMs());
     q.exec();
     emit artifactsChanged(a.conversationId);
+}
+
+void Store::deleteArtifactsForMessages(const QStringList &messageIds)
+{
+    QSet<QString> touched;
+    m_db.transaction();
+    QSqlQuery find(m_db);
+    find.prepare(QStringLiteral("SELECT DISTINCT conversation_id FROM artifacts WHERE message_id = ?"));
+    QSqlQuery del(m_db);
+    del.prepare(QStringLiteral("DELETE FROM artifacts WHERE message_id = ?"));
+    for (const QString &id : messageIds)
+    {
+        if (id.isEmpty())
+            continue;
+        find.addBindValue(id);
+        if (find.exec())
+            while (find.next())
+                touched.insert(find.value(0).toString());
+        find.finish();
+        del.addBindValue(id);
+        del.exec();
+    }
+    m_db.commit();
+    for (const QString &conv : touched)
+        emit artifactsChanged(conv);
 }
 
 void Store::deleteArtifactsForConversation(const QString &conversationId)

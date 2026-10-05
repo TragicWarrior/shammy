@@ -380,6 +380,87 @@ private slots:
         QCOMPARE(Store::ftsQuery(QString()), QString());
     }
 
+    void emptyRepliesAreRemovedOnOpenButReasoningOnlyOnesStay()
+    {
+        QTemporaryDir dir;
+        const QString path = dir.path() + "/blank.db";
+        QString conv;
+        {
+            Store store;
+            QVERIFY(store.open(path));
+            Conversation c;
+            c.id = conv = newId();
+            c.title = QStringLiteral("t");
+            c.createdAt = c.updatedAt = nowMs();
+            store.upsertConversation(c);
+            const auto add = [&](const QString &role, const QString &content, const QString &reasoning, const QString &tools, qint64 at)
+            {
+                Message m;
+                m.id = newId();
+                m.conversationId = c.id;
+                m.role = role;
+                m.content = content;
+                m.reasoning = reasoning;
+                m.toolCallsJson = tools;
+                m.createdAt = at;
+                store.upsertMessage(m);
+            };
+            add(QStringLiteral("user"), QStringLiteral("q"), {}, {}, 1);
+            add(QStringLiteral("assistant"), QString(), {}, {}, 2);                             // blank: goes
+            add(QStringLiteral("assistant"), QStringLiteral("  \n "), {}, {}, 3);                // blank: goes
+            add(QStringLiteral("assistant"), QString(), QStringLiteral("thought"), {}, 4);      // reasoning only: stays
+            add(QStringLiteral("assistant"), QString(), {}, QStringLiteral("[{\"id\":\"c\"}]"), 5); // tool call: stays
+            add(QStringLiteral("user"), QString(), {}, {}, 6);                                   // not a reply: stays
+            add(QStringLiteral("assistant"), QStringLiteral("a"), {}, {}, 7);
+            QCOMPARE(store.messages(conv).size(), 7);
+        }
+        Store store;
+        QVERIFY(store.open(path));
+        QStringList left;
+        for (const Message &m : store.messages(conv))
+            left << QStringLiteral("%1@%2").arg(m.role).arg(m.createdAt);
+        QCOMPARE(left, (QStringList{"user@1", "assistant@4", "assistant@5", "user@6", "assistant@7"}));
+    }
+
+    void artifactsCanBeDeletedByTheMessagesThatMadeThem()
+    {
+        QTemporaryDir dir;
+        Store store;
+        QVERIFY(store.open(dir.path() + "/art.db"));
+        Conversation c;
+        c.id = newId();
+        c.title = QStringLiteral("t");
+        c.createdAt = c.updatedAt = nowMs();
+        store.upsertConversation(c);
+        const auto add = [&](const QString &ident, const QString &msg)
+        {
+            Artifact a;
+            a.id = newId();
+            a.conversationId = c.id;
+            a.messageId = msg;
+            a.identifier = ident;
+            a.title = ident;
+            a.type = QStringLiteral("text/html");
+            a.content = QStringLiteral("x");
+            a.version = store.nextArtifactVersion(c.id, ident);
+            store.insertArtifact(a);
+        };
+        add(QStringLiteral("page"), QStringLiteral("m1"));
+        add(QStringLiteral("page"), QStringLiteral("m2"));
+        add(QStringLiteral("other"), QStringLiteral("m2"));
+        add(QStringLiteral("keep"), QStringLiteral("m3"));
+        QSignalSpy changed(&store, &Store::artifactsChanged);
+        store.deleteArtifactsForMessages({QStringLiteral("m2"), QString(), QStringLiteral("no-such")});
+        QCOMPARE(changed.count(), 1);
+        QStringList left;
+        for (const Artifact &a : store.artifactsForConversation(c.id))
+            left << QStringLiteral("%1 v%2 %3").arg(a.identifier).arg(a.version).arg(a.messageId);
+        QCOMPARE(left, (QStringList{"keep v1 m3", "page v1 m1"}));
+        QCOMPARE(store.nextArtifactVersion(c.id, QStringLiteral("page")), 2); // numbering picks up from what is left
+        store.deleteArtifactsForMessages({});
+        QCOMPARE(changed.count(), 1);
+    }
+
     void refusesEmptyConversationId()
     {
         QTemporaryDir dir;

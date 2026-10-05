@@ -37,7 +37,9 @@ QHash<int, QByteArray> MessageListModel::roleNames() const
     };
 }
 
-static QVariantList splitParts(const QString &content)
+// `markdown`: the text parts will be rendered as Markdown (every message but
+// the user's own, which is shown as typed).
+static QVariantList splitParts(const QString &content, bool markdown)
 {
     QVariantList list;
     const auto parts = ContentSplitter::split(content);
@@ -46,7 +48,8 @@ static QVariantList splitParts(const QString &content)
     {
         QVariantMap p;
         p.insert(QStringLiteral("type"), c.type);
-        p.insert(QStringLiteral("text"), c.text);
+        p.insert(QStringLiteral("text"),
+                 markdown && c.type == QLatin1String("text") ? ContentSplitter::escapeLoneTildes(c.text) : c.text);
         p.insert(QStringLiteral("language"), c.language);
         p.insert(QStringLiteral("identifier"), c.identifier);
         p.insert(QStringLiteral("title"), c.title);
@@ -62,7 +65,7 @@ QVariantList MessageListModel::partsOf(const ChatMessage &m) const
         return {};
     if (!m.partsReady)
     {
-        m.cachedParts = splitParts(visibleContent(m));
+        m.cachedParts = splitParts(visibleContent(m), m.role != QLatin1String("user"));
         m.partsReady = true;
     }
     return m.cachedParts;
