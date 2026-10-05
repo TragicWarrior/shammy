@@ -1,3 +1,11 @@
+shammy (0.12.2-1) unstable; urgency=medium
+
+  * Add database indexes: chats open and load faster.
+  * Search through the full-text index, after typing pauses.
+  * Search matches message words from their start; titles anywhere.
+
+ -- Bryan Christ <bryan.christ@gmail.com>  Sun, 04 Oct 2026 19:24:27 -0500
+
 shammy (0.12.1-1) unstable; urgency=medium
 
   * Claude import: keep messages and settings added here when importing again.
