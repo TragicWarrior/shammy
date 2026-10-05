@@ -188,6 +188,9 @@ ChatController::ChatController(Store *store, OpenAiClient *client, McpController
             &ChatController::wordExportAvailableChanged);
     connect(m_settings, &SettingsController::officeBinaryPathChanged, this,
             &ChatController::wordExportAvailableChanged);
+    m_searchTimer.setSingleShot(true);
+    m_searchTimer.setInterval(kSearchDelayMs);
+    connect(&m_searchTimer, &QTimer::timeout, this, &ChatController::reloadHistory);
     applyDefaultThinking();
     reloadHistory();
     refreshContextUsage();
@@ -247,7 +250,16 @@ void ChatController::setSearchQuery(const QString &q)
         return;
     m_search = q;
     emit searchQueryChanged();
-    reloadHistory();
+    // Clearing the box shows the full list at once; typing waits for a pause.
+    if (q.trimmed().isEmpty())
+    {
+        m_searchTimer.stop();
+        reloadHistory();
+    }
+    else
+    {
+        m_searchTimer.start();
+    }
 }
 
 QString ChatController::emptyHint() const

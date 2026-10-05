@@ -1,4 +1,5 @@
 #include "FakeTools.h"
+#include "Util.h"
 #include "artifacts/PdfExtract.h"
 #include "controllers/ChatController.h"
 #include "controllers/McpController.h"
@@ -692,6 +693,47 @@ private slots:
         QVERIFY(QFile::remove(path));
         QVERIFY(f.say(QStringLiteral("read it")));
         QVERIFY(userTexts(f.ai.requests.last()).last().contains(QLatin1String("Attached file `gone.txt` could not be read")));
+    }
+
+    // -- the search box waits for a pause in typing ------------------------------
+
+    void searchRunsOnceAfterTypingPausesAndClearsAtOnce()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        for (const char *title : {"alpha notes", "beta notes", "gamma"})
+        {
+            Conversation c;
+            c.id = newId();
+            c.title = QString::fromLatin1(title);
+            c.createdAt = c.updatedAt = nowMs();
+            f.store.upsertConversation(c);
+        }
+        ConversationListModel *list = f.chat->conversations();
+        QCOMPARE(list->rowCount(), 3);
+
+        QSignalSpy reloads(list, &QAbstractItemModel::modelReset);
+        QSignalSpy typed(f.chat.get(), &ChatController::searchQueryChanged);
+        for (const char *soFar : {"a", "al", "alp", "alph"})
+            f.chat->setSearchQuery(QString::fromLatin1(soFar));
+        // The text is taken at once (the box shows it), the search is not run yet.
+        QCOMPARE(typed.count(), 4);
+        QCOMPARE(f.chat->searchQuery(), QStringLiteral("alph"));
+        QCOMPARE(reloads.count(), 0);
+        QCOMPARE(list->rowCount(), 3);
+
+        QVERIFY(waitFor([&]() { return reloads.count() > 0; }, 2000));
+        QTest::qWait(ChatController::kSearchDelayMs * 2);
+        QCOMPARE(reloads.count(), 1); // one search for four keystrokes
+        QCOMPARE(list->rowCount(), 1);
+
+        // Emptying the box brings the whole list back without a wait.
+        f.chat->setSearchQuery(QStringLiteral("be"));
+        f.chat->setSearchQuery(QString());
+        QCOMPARE(reloads.count(), 2);
+        QCOMPARE(list->rowCount(), 3);
+        QTest::qWait(ChatController::kSearchDelayMs * 2);
+        QCOMPARE(reloads.count(), 2); // the search for "be" was dropped
     }
 
     // -- send() says whether it sent, so the composer can keep a draft ----------

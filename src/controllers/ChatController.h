@@ -18,6 +18,7 @@
 #include <QList>
 #include <QObject>
 #include <QSet>
+#include <QTimer>
 #include <QUrl>
 #include <QVariant>
 #include <QVector>
@@ -168,6 +169,8 @@ public:
     Q_INVOKABLE void exportCurrentArtifactToWord(const QString &destPath);
     Q_INVOKABLE QUrl suggestedWordExportUrl() const;
     Q_INVOKABLE void reloadHistory();
+    // How long typing in the search box must pause before the search runs.
+    static constexpr int kSearchDelayMs = 180;
     Q_INVOKABLE void compact(const QString &extra = {});
     Q_INVOKABLE QVariantList matchingSlashCommands(const QString &text) const;
 
@@ -339,6 +342,8 @@ private:
     QString m_previewHtml;
     int m_previewSeq = 0;
     QString m_search;
+    // Searching waits for a pause in typing, so each keystroke is not a query.
+    QTimer m_searchTimer;
     int m_toolRounds = 0;
     bool m_forceFinalWrite = false;
     int m_finalWriteAttempts = 0;
