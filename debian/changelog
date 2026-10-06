@@ -1,3 +1,14 @@
+shammy (0.13.0-1) unstable; urgency=medium
+
+  * Build and run on macOS (Apple silicon); the binary is now built into
+    build/<platform>/.
+  * Warn when the server loaded the model with a smaller context than the one
+    set here (Ollama).
+  * Say so when MCP tools exist but Tools is off for the current model.
+  * Use a real fixed-width font on macOS and Windows.
+
+ -- Bryan Christ <bryan.christ@gmail.com>  Tue, 06 Oct 2026 17:06:24 -0500
+
 shammy (0.12.3-1) unstable; urgency=medium
 
   * Do not save replies that were stopped or failed before producing anything.
