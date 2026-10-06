@@ -40,7 +40,7 @@ Popup {
                 text: chat.permissionArgs
                 wrapMode: TextEdit.Wrap
                 color: Theme.text
-                font.family: "monospace"
+                font.family: Theme.mono
                 font.pixelSize: 12
                 background: Rectangle { color: Theme.bg; radius: 6 }
             }

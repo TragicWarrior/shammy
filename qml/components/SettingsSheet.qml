@@ -660,6 +660,27 @@ Popup {
                             Layout.rightMargin: 24
                         }
                         Text {
+                            visible: text !== ""
+                            text: settings.contextWarning
+                            color: Theme.warning
+                            font.pixelSize: 12
+                            wrapMode: Text.Wrap
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 24
+                            Layout.rightMargin: 24
+                        }
+                        Text {
+                            visible: !settings.modelTools && mcp.toolCount > 0
+                            text: "MCP servers are running with " + mcp.toolCount + " tools, but Tools is off for "
+                                  + settings.currentModel + ", so it is not told about them. Turn Tools on below if the model can call tools."
+                            color: Theme.warning
+                            font.pixelSize: 12
+                            wrapMode: Text.Wrap
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 24
+                            Layout.rightMargin: 24
+                        }
+                        Text {
                             visible: settings.models.rowCount() === 0
                             text: "No models yet — enable a reachable backend below and Save."
                             color: Theme.muted
@@ -949,7 +970,7 @@ Popup {
                             text: mcp.logText
                             wrapMode: TextEdit.Wrap
                             color: Theme.muted
-                            font.family: "monospace"
+                            font.family: Theme.mono
                             font.pixelSize: 11
                             background: Rectangle { color: Theme.panel; radius: 8 }
                         }
@@ -1061,7 +1082,7 @@ Popup {
                                         }
                                         font.pixelSize: 18
                                         font.weight: Font.DemiBold
-                                        font.family: "monospace"
+                                        font.family: Theme.mono
                                         Layout.preferredWidth: 56
                                     }
                                     Slider {

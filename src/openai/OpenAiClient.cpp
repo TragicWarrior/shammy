@@ -243,6 +243,27 @@ void OpenAiClient::probeModel(const QString &baseUrl, const QString &apiKey, con
     });
 }
 
+void OpenAiClient::probeLoadedContext(const QString &baseUrl, const QString &apiKey, const QString &backendId,
+                                      const QString &model)
+{
+    if (model.trimmed().isEmpty() || baseUrl.trimmed().isEmpty())
+    {
+        return;
+    }
+    QNetworkRequest nreq(ollamaPsUrl(baseUrl));
+    applyAuth(&nreq, apiKey, {});
+    nreq.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
+    nreq.setTransferTimeout(5000);
+    QNetworkReply *reply = m_nam.get(nreq);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, backendId, model]()
+    {
+        reply->deleteLater();
+        const int context =
+            reply->error() == QNetworkReply::NoError ? loadedContextFromOllamaPs(reply->readAll(), model) : 0;
+        emit loadedContextProbed(backendId, model, context);
+    });
+}
+
 void OpenAiClient::abort()
 {
     abortInternal(true);

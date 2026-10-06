@@ -106,3 +106,45 @@ QUrl ollamaShowUrl(const QString &baseUrl)
     }
     return QUrl(u + QStringLiteral("/api/show"));
 }
+
+QUrl ollamaPsUrl(const QString &baseUrl)
+{
+    QString u = OpenAiClient::normalizeBaseUrl(baseUrl);
+    if (u.endsWith(QLatin1String("/v1")))
+    {
+        u.chop(3);
+    }
+    return QUrl(u + QStringLiteral("/api/ps"));
+}
+
+int loadedContextFromOllamaPs(const QByteArray &json, const QString &model)
+{
+    // "qwen3" and "qwen3:latest" are the same model to Ollama.
+    auto canonical = [](QString id)
+    {
+        id = id.trimmed().toLower();
+        if (!id.isEmpty() && !id.section(QLatin1Char('/'), -1).contains(QLatin1Char(':')))
+        {
+            id += QStringLiteral(":latest");
+        }
+        return id;
+    };
+    const QString want = canonical(model);
+    if (want.isEmpty())
+    {
+        return 0;
+    }
+    const QJsonArray models = QJsonDocument::fromJson(json).object().value(QStringLiteral("models")).toArray();
+    for (const auto &v : models)
+    {
+        const QJsonObject m = v.toObject();
+        if (canonical(m.value(QStringLiteral("name")).toString()) != want
+            && canonical(m.value(QStringLiteral("model")).toString()) != want)
+        {
+            continue;
+        }
+        const int n = m.value(QStringLiteral("context_length")).toInt();
+        return n > 0 ? n : 0;
+    }
+    return 0;
+}

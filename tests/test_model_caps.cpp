@@ -15,6 +15,33 @@ private slots:
                  QString("http://127.0.0.1:11434/api/show"));
     }
 
+    void psUrlStripsV1()
+    {
+        QCOMPARE(ollamaPsUrl("http://127.0.0.1:11434/v1").toString(), QString("http://127.0.0.1:11434/api/ps"));
+        QCOMPARE(ollamaPsUrl("http://127.0.0.1:11434/").toString(), QString("http://127.0.0.1:11434/api/ps"));
+    }
+
+    void loadedContextIsReadForTheRightModel()
+    {
+        const QByteArray ps = R"({"models":[
+            {"name":"gemma4:26b-a4b","model":"gemma4:26b-a4b","context_length":4096},
+            {"name":"batiai/qwen3.6-35b:iq3","model":"batiai/qwen3.6-35b:iq3","context_length":131072},
+            {"name":"llama3.2:latest","model":"llama3.2:latest","context_length":8192},
+            {"name":"old:latest","model":"old:latest"}]})";
+        QCOMPARE(loadedContextFromOllamaPs(ps, QStringLiteral("gemma4:26b-a4b")), 4096);
+        QCOMPARE(loadedContextFromOllamaPs(ps, QStringLiteral("batiai/qwen3.6-35b:iq3")), 131072);
+        // No tag means ":latest", in either direction, and case does not matter.
+        QCOMPARE(loadedContextFromOllamaPs(ps, QStringLiteral("llama3.2")), 8192);
+        QCOMPARE(loadedContextFromOllamaPs(ps, QStringLiteral("LLAMA3.2:latest")), 8192);
+        // Not loaded, another tag of the same model, an older Ollama without the field, not JSON.
+        QCOMPARE(loadedContextFromOllamaPs(ps, QStringLiteral("mistral")), 0);
+        QCOMPARE(loadedContextFromOllamaPs(ps, QStringLiteral("gemma4:12b")), 0);
+        QCOMPARE(loadedContextFromOllamaPs(ps, QStringLiteral("old")), 0);
+        QCOMPARE(loadedContextFromOllamaPs(ps, QString()), 0);
+        QCOMPARE(loadedContextFromOllamaPs("<html>404</html>", QStringLiteral("llama3.2")), 0);
+        QCOMPARE(loadedContextFromOllamaPs("{\"models\":[]}", QStringLiteral("llama3.2")), 0);
+    }
+
     void nameVision()
     {
         QVERIFY(capsFromModelId(QStringLiteral("llava:7b")).vision);

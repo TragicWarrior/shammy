@@ -74,7 +74,7 @@ Rectangle {
         text: root.shown
         wrapMode: Text.Wrap
         font.pixelSize: 13
-        font.family: root.monospace ? "monospace" : metrics.font.family
+        font.family: root.monospace ? Theme.mono : metrics.font.family
         opacity: 0
         enabled: false
         visible: !root.headerOnly
@@ -108,7 +108,7 @@ Rectangle {
             color: Theme.muted
             wrapMode: Text.Wrap
             font.pixelSize: 13
-            font.family: root.monospace ? "monospace" : bodyText.font.family
+            font.family: root.monospace ? Theme.mono : bodyText.font.family
         }
         onMovementEnded: stickToEnd = (contentHeight <= height) || (contentY + height >= contentHeight - 24)
         onDraggingChanged: {

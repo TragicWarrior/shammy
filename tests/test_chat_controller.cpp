@@ -51,6 +51,9 @@ public:
         QString args = QStringLiteral("{}");
     };
     using Handler = std::function<Reply(int index, const QJsonObject &body)>;
+    // What Ollama's /api/ps says is loaded; empty for a server without one (404).
+    QByteArray psReply;
+    int psRequests = 0;
 
     static Reply text(const QString &t) { return {Text, t, {}, {}}; }
     static Reply toolCall(const QString &name, const QString &args = QStringLiteral("{}"))
@@ -142,6 +145,12 @@ private:
         {
             send(s, QStringLiteral("application/json"),
                  QStringLiteral("{\"object\":\"list\",\"data\":[{\"id\":\"test-model\"}]}").toUtf8());
+            return;
+        }
+        if (requestLine.startsWith("GET") && requestLine.contains("/api/ps") && !psReply.isEmpty())
+        {
+            ++psRequests;
+            send(s, QStringLiteral("application/json"), psReply);
             return;
         }
         if (!requestLine.contains("/chat/completions"))
@@ -649,6 +658,76 @@ private slots:
         QCOMPARE(sent.count(QLatin1String("(Cut to fit the model's context window.)")), 1);
         QVERIFY2(sent.contains(QLatin1String("Attached file `three.txt` was left out")), qPrintable(sent.right(300)));
         QVERIFY(sent.toUtf8().size() < 27500);
+    }
+
+    // -- the server's real context size ------------------------------------------
+
+    static QByteArray loaded(int context)
+    {
+        return QStringLiteral("{\"models\":[{\"name\":\"test-model:latest\",\"model\":\"test-model:latest\","
+                              "\"context_length\":%1}]}").arg(context).toUtf8();
+    }
+
+    void aServerContextSmallerThanTheSettingIsFlagged()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        SettingsController &s = *f.settings;
+        const QString backend = s.currentBackendId();
+        s.setModelContextFromText(backend, QStringLiteral("test-model"), QStringLiteral("48k"));
+        QCOMPARE(s.serverContext(), 0); // nothing known yet
+        QCOMPARE(s.contextWarning(), QString());
+
+        // Asked once the reply is in, which is when the model is sure to be loaded.
+        f.ai.psReply = loaded(4096);
+        const int before = f.ai.psRequests;
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("hi")));
+        QVERIFY(waitFor([&]() { return s.serverContext() == 4096; }));
+        QVERIFY(f.ai.psRequests > before);
+        QCOMPARE(s.contextWarningLabel(), QStringLiteral("server context 4K"));
+        QVERIFY2(s.contextWarning().contains(QLatin1String("Fake loaded test-model with a context of 4K, not the 48K set here")),
+                 qPrintable(s.contextWarning()));
+
+        // Matching the setting to the server clears it, with a signal for the window.
+        QSignalSpy spy(&s, &SettingsController::contextWarningChanged);
+        s.setModelContextFromText(backend, QStringLiteral("test-model"), QStringLiteral("4k"));
+        QVERIFY(spy.count() > 0);
+        QCOMPARE(s.serverContext(), 0);
+        QCOMPARE(s.contextWarningLabel(), QString());
+        QCOMPARE(s.contextWarning(), QString());
+
+        // A server with more room than the setting is not a problem.
+        s.setModelContextFromText(backend, QStringLiteral("test-model"), QStringLiteral("48k"));
+        QCOMPARE(s.serverContext(), 4096);
+        f.ai.psReply = loaded(131072);
+        s.probeLoadedContext();
+        QVERIFY(waitFor([&]() { return s.serverContext() == 0; }));
+        QCOMPARE(s.contextWarning(), QString());
+        s.setModelContextFromText(backend, QStringLiteral("test-model"), QStringLiteral("256k"));
+    }
+
+    void aServerThatDoesNotSayItsContextIsNotFlagged()
+    {
+        // llama.cpp and the like have no /api/ps: a 404, and another model's entry, mean "unknown".
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        SettingsController &s = *f.settings;
+        s.setModelContextFromText(s.currentBackendId(), QStringLiteral("test-model"), QStringLiteral("48k"));
+        QSignalSpy spy(&s, &SettingsController::contextWarningChanged);
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("hi")));
+        QTest::qWait(200);
+        QCOMPARE(s.serverContext(), 0);
+
+        f.ai.psReply = "{\"models\":[{\"name\":\"other:latest\",\"context_length\":4096}]}";
+        const int before = f.ai.psRequests;
+        s.probeLoadedContext();
+        QVERIFY(waitFor([&]() { return f.ai.psRequests > before; }));
+        QTest::qWait(100);
+        QCOMPARE(s.serverContext(), 0);
+        QCOMPARE(s.contextWarning(), QString());
+        s.setModelContextFromText(s.currentBackendId(), QStringLiteral("test-model"), QStringLiteral("256k"));
     }
 
     void aLargeContextTakesMoreThanTheOldFixedCap()

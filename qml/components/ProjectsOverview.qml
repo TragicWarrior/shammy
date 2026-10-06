@@ -332,7 +332,7 @@ Item {
                             text: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][importSpin]
                             color: Theme.text
                             font.pixelSize: 14
-                            font.family: "monospace"
+                            font.family: Theme.mono
                             property int importSpin: 0
                             Timer {
                                 interval: 80

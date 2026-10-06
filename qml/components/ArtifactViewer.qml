@@ -131,7 +131,7 @@ Item {
                 wrapMode: TextEdit.Wrap
                 text: chat.currentArtifactContent
                 color: Theme.text
-                font.family: "monospace"
+                font.family: Theme.mono
                 font.pixelSize: 12
                 background: Rectangle { color: Theme.bg }
                 selectByMouse: true

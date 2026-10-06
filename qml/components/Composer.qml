@@ -347,6 +347,22 @@ Rectangle {
             }
 
             Text {
+                // MCP tools are there, but this model is not being sent any.
+                visible: !settings.modelTools && mcp.toolCount > 0
+                Layout.alignment: Qt.AlignVCenter
+                Layout.preferredWidth: implicitWidth
+                text: "tools off for this model"
+                color: Theme.warning
+                font.pixelSize: 11
+                MouseArea {
+                    anchors.fill: parent
+                    anchors.margins: -6
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.settingsRequested()
+                }
+            }
+
+            Text {
                 visible: settings.modelTools
                 Layout.alignment: Qt.AlignVCenter
                 Layout.preferredWidth: implicitWidth

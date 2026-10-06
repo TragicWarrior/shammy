@@ -99,6 +99,8 @@ SettingsController::SettingsController(Store *store, OpenAiClient *client, QObje
                 }
             });
     connect(m_client, &OpenAiClient::modelProbed, this, &SettingsController::onModelProbed);
+    connect(m_client, &OpenAiClient::loadedContextProbed, this, &SettingsController::onLoadedContextProbed);
+    connect(this, &SettingsController::contextSizeChanged, this, &SettingsController::contextWarningChanged);
     refreshModels();
 }
 
@@ -133,6 +135,7 @@ void SettingsController::setCurrentBackendId(const QString &id)
     emit defaultThinkingModeChanged();
     emit contextSizeChanged();
     emit modelCapsChanged();
+    probeLoadedContext();
     // The model list already spans all enabled backends, so switching the
     // selected backend does not re-fetch models.
 }
@@ -888,6 +891,62 @@ void SettingsController::probeCurrentModel()
         emit modelCapsChanged();
     }
     m_client->probeModel(b.baseUrl, b.apiKey, m_model);
+    probeLoadedContext();
+}
+
+void SettingsController::probeLoadedContext()
+{
+    const Backend b = currentBackend();
+    if (b.baseUrl.isEmpty() || m_model.isEmpty())
+    {
+        return;
+    }
+    m_client->probeLoadedContext(b.baseUrl, b.apiKey, b.id, m_model);
+}
+
+void SettingsController::onLoadedContextProbed(const QString &backendId, const QString &model, int context)
+{
+    if (backendId != m_backendId || model != m_model)
+    {
+        return; // an answer about a model that is no longer selected
+    }
+    if (context == m_loadedContext && backendId == m_loadedContextBackend && model == m_loadedContextModel)
+    {
+        return;
+    }
+    m_loadedContext = context;
+    m_loadedContextBackend = backendId;
+    m_loadedContextModel = model;
+    emit contextWarningChanged();
+}
+
+int SettingsController::serverContext() const
+{
+    if (m_loadedContextBackend != m_backendId || m_loadedContextModel != m_model)
+    {
+        return 0;
+    }
+    return m_loadedContext > 0 && m_loadedContext < contextSize() ? m_loadedContext : 0;
+}
+
+QString SettingsController::contextWarningLabel() const
+{
+    const int n = serverContext();
+    return n > 0 ? QStringLiteral("server context %1").arg(formatContextSize(n)) : QString();
+}
+
+QString SettingsController::contextWarning() const
+{
+    const int n = serverContext();
+    if (n <= 0)
+    {
+        return {};
+    }
+    return QStringLiteral(
+               "%1 loaded %2 with a context of %3, not the %4 set here, and cuts off whatever does not fit: "
+               "usually the instructions and tool definitions at the start. Raise the context size on the "
+               "server (Ollama ignores the one sent with a request), or lower it here to match.")
+        .arg(currentBackendName(), m_model, formatContextSize(n), formatContextSize(contextSize()));
 }
 
 void SettingsController::onModelProbed(const QString &model, bool vision, bool tools, bool thinking,
