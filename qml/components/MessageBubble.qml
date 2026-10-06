@@ -338,7 +338,7 @@ Item {
                     text: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][spinFrame]
                     color: Theme.text
                     font.pixelSize: 14
-                    font.family: "monospace"
+                    font.family: Theme.mono
                     property int spinFrame: 0
                     Timer {
                         interval: 80

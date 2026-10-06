@@ -61,7 +61,7 @@ Rectangle {
                 color: Theme.text
                 selectedTextColor: Theme.text
                 selectionColor: Theme.selection
-                font.family: "monospace"
+                font.family: Theme.mono
                 font.pixelSize: 13
                 background: Item {}
                 selectByMouse: true

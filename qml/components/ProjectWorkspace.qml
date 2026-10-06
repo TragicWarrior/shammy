@@ -497,7 +497,7 @@ Item {
                     text: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][spin]
                     color: Theme.text
                     font.pixelSize: 12
-                    font.family: "monospace"
+                    font.family: Theme.mono
                     property int spin: 0
                     Timer {
                         interval: 80

@@ -208,13 +208,29 @@ ApplicationWindow {
                         text: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"][compactSpin]
                         color: Theme.warning
                         font.pixelSize: 13
-                        font.family: "monospace"
+                        font.family: Theme.mono
                         property int compactSpin: 0
                         Timer {
                             interval: 80
                             running: chat.compacting
                             repeat: true
                             onTriggered: parent.compactSpin = (parent.compactSpin + 1) % 10
+                        }
+                    }
+                    Text {
+                        // The server is running a smaller context than the one set here.
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.right: usageLab.left
+                        anchors.rightMargin: 32
+                        visible: text !== ""
+                        text: settings.contextWarningLabel
+                        color: Theme.warning
+                        font.pixelSize: 12
+                        MouseArea {
+                            anchors.fill: parent
+                            anchors.margins: -6
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: settingsSheet.open()
                         }
                     }
                     Text {
@@ -234,7 +250,7 @@ ApplicationWindow {
                             return Theme.muted
                         }
                         font.pixelSize: 12
-                        font.family: "monospace"
+                        font.family: Theme.mono
                     }
                     Text {
                         id: backendLab

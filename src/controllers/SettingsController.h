@@ -29,6 +29,13 @@ class SettingsController : public QObject
     Q_PROPERTY(QString defaultThinkingMode READ defaultThinkingMode WRITE setDefaultThinkingMode NOTIFY defaultThinkingModeChanged)
     Q_PROPERTY(int contextSize READ contextSize WRITE setContextSize NOTIFY contextSizeChanged)
     Q_PROPERTY(QString contextSizeLabel READ contextSizeLabel NOTIFY contextSizeChanged)
+    // The context size the server really loaded the current model with, when it
+    // says (Ollama does, once the model is loaded) and it is smaller than the one
+    // set here: the server then cuts prompts short without saying so. 0 and
+    // empty when there is nothing to warn about.
+    Q_PROPERTY(int serverContext READ serverContext NOTIFY contextWarningChanged)
+    Q_PROPERTY(QString contextWarningLabel READ contextWarningLabel NOTIFY contextWarningChanged)
+    Q_PROPERTY(QString contextWarning READ contextWarning NOTIFY contextWarningChanged)
     Q_PROPERTY(bool darkTheme READ darkTheme WRITE setDarkTheme NOTIFY darkThemeChanged)
     Q_PROPERTY(bool showReasoning READ showReasoning WRITE setShowReasoning NOTIFY showReasoningChanged)
     Q_PROPERTY(bool showToolInsights READ showToolInsights WRITE setShowToolInsights NOTIFY showToolInsightsChanged)
@@ -101,6 +108,12 @@ public:
     int contextSizeFor(const QString &backendId, const QString &model) const;
     void setContextSize(int n);
     QString contextSizeLabel() const;
+    int serverContext() const;
+    QString contextWarningLabel() const;
+    QString contextWarning() const;
+    // Asks the server again; called once a reply has finished, when the model
+    // is sure to be loaded.
+    void probeLoadedContext();
     Q_INVOKABLE void setContextSizeFromText(const QString &text);
     Q_INVOKABLE void setModelContextFromText(const QString &backendId, const QString &model,
                                              const QString &text);
@@ -198,6 +211,7 @@ signals:
     void samplingChanged();
     void defaultThinkingModeChanged();
     void contextSizeChanged();
+    void contextWarningChanged();
     void darkThemeChanged();
     void showReasoningChanged();
     void showToolInsightsChanged();
@@ -236,6 +250,7 @@ private:
     void setBoolPref(bool *field, const QString &key, bool v, void (SettingsController::*sig)());
     void onModelProbed(const QString &model, bool vision, bool tools, bool thinking, bool audio,
                        bool advertised);
+    void onLoadedContextProbed(const QString &backendId, const QString &model, int context);
     Store *m_store = nullptr;
     OpenAiClient *m_client = nullptr;
     BackendListModel m_backends;
@@ -265,6 +280,10 @@ private:
     bool m_loadingModels = false;
     QString m_probeBackend;
     QString m_probeModel;
+    // What the server reported, and for which model: stale once either changes.
+    int m_loadedContext = 0;
+    QString m_loadedContextBackend;
+    QString m_loadedContextModel;
     QSettings m_qs;
     bool m_webSearchEnabled = false;
     QString m_webSearchProvider = QStringLiteral("brave");

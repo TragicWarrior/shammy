@@ -29,6 +29,9 @@ QtObject {
     readonly property color danger: "#ef4444"
     readonly property color tool: dark ? "#262626" : "#f4f4f4"
     readonly property color avatar: "#000000"
+    // "monospace" is a fontconfig alias, not a family: it only resolves on Linux.
+    readonly property string mono: Qt.platform.os === "osx" || Qt.platform.os === "macos" ? "Menlo"
+                                 : Qt.platform.os === "windows" ? "Consolas" : "monospace"
     readonly property int radius: 12
     readonly property int radiusMd: 18
     readonly property int radiusLg: 26

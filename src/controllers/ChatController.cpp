@@ -2138,6 +2138,8 @@ void ChatController::finishInterruptedReply()
 
 void ChatController::onFinished(const QString &reason)
 {
+    // The model is loaded now, so the server can say what context it really has.
+    m_settings->probeLoadedContext();
     if (reason == QLatin1String("aborted"))
     {
         finishInterruptedReply();

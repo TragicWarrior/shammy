@@ -25,6 +25,9 @@ public:
 
     void listModels(const QString &baseUrl, const QString &apiKey, const QString &backendId = {});
     void probeModel(const QString &baseUrl, const QString &apiKey, const QString &model);
+    // Asks an Ollama server what context size it loaded `model` with.
+    void probeLoadedContext(const QString &baseUrl, const QString &apiKey, const QString &backendId,
+                            const QString &model);
     void streamChat(const ChatRequest &req);
     void completeChat(const ChatRequest &req);
     void abort();
@@ -33,6 +36,8 @@ public:
 
 signals:
     void modelsListed(const QString &backendId, const QStringList &ids, const QString &error);
+    // `context` is 0 when the server is not Ollama, or has not loaded the model.
+    void loadedContextProbed(const QString &backendId, const QString &model, int context);
     void modelProbed(const QString &model, bool vision, bool tools, bool thinking, bool audio,
                      bool advertised);
     void chunk(const QString &text);
