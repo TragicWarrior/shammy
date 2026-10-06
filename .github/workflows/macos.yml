@@ -1,0 +1,64 @@
+name: macOS (arm64)
+
+on:
+  push:
+    branches: [main, ci/macos-arm64]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt and tools
+        run: brew install qt ninja openssl@3 poppler
+
+      - name: Versions
+        run: |
+          uname -m
+          clang++ --version
+          cmake --version
+          "$(brew --prefix qt)/bin/qmake" --version
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix openssl@3)"
+
+      # -k 0: keep going, so one run lists every compile error.
+      - name: Build
+        run: cmake --build build -- -k 0
+
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build --output-on-failure
+
+      # Informational: start the app without a display and see that it stays up.
+      - name: Launch
+        continue-on-error: true
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          export HOME="$RUNNER_TEMP/home"
+          mkdir -p "$HOME"
+          ./build/shammy > "$RUNNER_TEMP/shammy.log" 2>&1 &
+          pid=$!
+          sleep 15
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "still running after 15 s"
+            kill "$pid"
+            status=0
+          else
+            wait "$pid" && status=0 || status=$?
+            echo "exited early with status $status"
+            [ "$status" -eq 0 ] && status=1
+          fi
+          cat "$RUNNER_TEMP/shammy.log"
+          exit "$status"
