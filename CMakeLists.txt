@@ -141,10 +141,13 @@ qt_add_executable(shammy ${APP_SOURCES})
 if(Qt6_VERSION VERSION_GREATER_EQUAL 6.5)
     set_target_properties(shammy PROPERTIES QT_QMLCACHEGEN_ARGUMENTS "--only-bytecode")
 endif()
+# The module's build folder is named after the URI by default, and "Shammy/"
+# is the same name as the "shammy" binary on a case-insensitive disk (macOS).
 qt_add_qml_module(shammy
     URI Shammy
     VERSION 1.0
     RESOURCE_PREFIX /qt/qml
+    OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/qml/Shammy
     QML_FILES ${QML_FILES}
 )
 
