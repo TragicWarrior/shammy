@@ -48,7 +48,7 @@ jobs:
         run: |
           export HOME="$RUNNER_TEMP/home"
           mkdir -p "$HOME"
-          ./build/shammy > "$RUNNER_TEMP/shammy.log" 2>&1 &
+          ./build/mac/shammy > "$RUNNER_TEMP/shammy.log" 2>&1 &
           pid=$!
           sleep 15
           if kill -0 "$pid" 2>/dev/null; then
