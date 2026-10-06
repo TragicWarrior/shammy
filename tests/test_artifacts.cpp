@@ -209,8 +209,9 @@ private slots:
     void aboutFiguresAreNotStruckThrough()
     {
         const QString reply = QStringLiteral("pack voltage (~53 V), so it shifts: roughly 16 mA near the bottom (~50 V) and about 14 mA near full (~57 V).");
-        // What went wrong: the renderer pairs the first two tildes.
-        QVERIFY(!struck(reply).isEmpty());
+        // What went wrong: the renderer pairs the first two tildes. Not checked
+        // here, because it depends on the md4c Qt was built with (Homebrew's
+        // Qt 6.11 leaves them alone).
         const QString fixed = ContentSplitter::escapeLoneTildes(reply);
         QCOMPARE(struck(fixed), QString());
         QCOMPARE(shown(fixed), reply); // reads exactly as written, tildes and all
