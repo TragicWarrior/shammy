@@ -101,7 +101,13 @@ private slots:
         QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, m_root.filePath(QStringLiteral("conf")));
         QCoreApplication::setOrganizationName(QStringLiteral("shammy-test"));
         QCoreApplication::setApplicationName(QStringLiteral("shammy-files-test"));
+#ifdef Q_OS_MACOS
+        // No XDG_DATA_HOME there: Qt's test mode moves app data to a "qttest" folder.
+        QStandardPaths::setTestModeEnabled(true);
+        QVERIFY(ProjectController::projectsRoot().contains(QStringLiteral("qttest")));
+#else
         QVERIFY(ProjectController::projectsRoot().startsWith(m_root.path()));
+#endif
         m_fakeOffice = m_root.filePath(QStringLiteral("fake-soffice"));
         QVERIFY(FakeTools::install(m_fakeOffice, FakeTools::soffice));
         m_fakePdf = m_root.filePath(QStringLiteral("fake-pdftotext"));

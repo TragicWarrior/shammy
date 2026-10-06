@@ -32,11 +32,17 @@ sudo apt-get install -y cmake g++ \
   qt6-webengine-dev qml6-module-qtwebengine
 ```
 
+macOS (Homebrew; `poppler` is optional, for PDF files):
+
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+brew install cmake qt openssl@3 poppler
+```
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug   # macOS: add -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix openssl@3)"
 cmake --build build -j
 ctest --test-dir build --output-on-failure
-./build/shammy
+./build/linux/shammy                           # macOS: ./build/mac/shammy
 ```
 
 A Debian package is a release build. The `.deb`, `.changes`, and `.buildinfo` are written to `releases/` (gitignored; the folder's `.gitignore` is tracked):
