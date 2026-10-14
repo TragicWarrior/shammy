@@ -17,7 +17,8 @@ Popup {
     }
 
     property int category: 0
-    readonly property var categories: ["General", "Models", "MCP", "Advanced", "About"]
+    readonly property var categories: ["General", "Models", "MCP", "Skills", "Advanced", "About"]
+    property var skillList: []
 
     ListModel { id: draftBackends }
     ListModel { id: draftMcp }
@@ -34,6 +35,7 @@ Popup {
         property bool rememberNavigatorState: false
         property bool enableArtifacts: true
         property bool includeLocalTime: true
+        property bool shellEnabled: false
         property string officeBinaryPath: ""
         property string pdftotextBinaryPath: ""
         property int compactionThreshold: 80
@@ -56,6 +58,8 @@ Popup {
         draft.rememberNavigatorState = settings.rememberNavigatorState
         draft.enableArtifacts = settings.enableArtifacts
         draft.includeLocalTime = settings.includeLocalTime
+        draft.shellEnabled = settings.shellEnabled
+        root.skillList = settings.skillsSnapshot()
         draft.officeBinaryPath = settings.officeBinaryPath
         if (officePathField)
             officePathField.text = draft.officeBinaryPath
@@ -90,6 +94,7 @@ Popup {
         settings.rememberNavigatorState = draft.rememberNavigatorState
         settings.enableArtifacts = draft.enableArtifacts
         settings.includeLocalTime = draft.includeLocalTime
+        settings.shellEnabled = draft.shellEnabled
         settings.officeBinaryPath = draft.officeBinaryPath
         settings.pdftotextBinaryPath = draft.pdftotextBinaryPath
         settings.compactionThreshold = draft.compactionThreshold
@@ -978,7 +983,117 @@ Popup {
                     }
                 }
 
-                // 3 — Advanced
+                // 3 — Skills
+                ScrollView {
+                    clip: true
+                    contentWidth: availableWidth
+                    ColumnLayout {
+                        width: Math.max(240, root.width - 250)
+                        spacing: 8
+
+                        Item { Layout.preferredHeight: 8 }
+
+                        Text {
+                            text: "Skills"
+                            color: Theme.text
+                            font.pixelSize: 15
+                            font.weight: Font.DemiBold
+                            Layout.leftMargin: 24
+                        }
+                        Text {
+                            text: "A skill is a folder holding a SKILL.md: a name and a description at the top, then instructions. "
+                                  + "The model sees the names and descriptions, and loads a skill's instructions when a request calls for it. "
+                                  + "Needs a model with Tools on."
+                            color: Theme.muted
+                            font.pixelSize: 12
+                            wrapMode: Text.Wrap
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 24
+                            Layout.rightMargin: 24
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 24
+                            Layout.rightMargin: 24
+                            radius: 12
+                            color: Theme.panel
+                            implicitHeight: shellRow.height + 24
+                            SettingsToggleRow {
+                                id: shellRow
+                                x: 16
+                                y: 12
+                                width: parent.width - 32
+                                title: "Run commands"
+                                help: "Let the model run shell commands (" + settings.skillsShellName + ") on this computer, as most skills need. "
+                                      + "Each command is shown to you first; you can allow it once or for the rest of the chat."
+                                checked: draft.shellEnabled
+                                onToggled: draft.shellEnabled = !draft.shellEnabled
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 24
+                            Layout.rightMargin: 24
+                            radius: 12
+                            color: Theme.panel
+                            implicitHeight: skillsCol.height + 24
+                            ColumnLayout {
+                                id: skillsCol
+                                x: 16
+                                y: 12
+                                width: parent.width - 32
+                                spacing: 8
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text {
+                                        text: root.skillList.length === 0 ? "No skills installed"
+                                              : root.skillList.length + (root.skillList.length === 1 ? " skill" : " skills")
+                                        color: Theme.text
+                                        font.pixelSize: 14
+                                        Layout.fillWidth: true
+                                    }
+                                    Button { text: "Refresh"; onClicked: root.skillList = settings.skillsSnapshot() }
+                                    Button { text: "Open folder"; onClicked: settings.openSkillsFolder() }
+                                }
+                                Text {
+                                    text: settings.skillsFolder
+                                    color: Theme.muted
+                                    font.pixelSize: 11
+                                    font.family: Theme.mono
+                                    wrapMode: Text.WrapAnywhere
+                                    Layout.fillWidth: true
+                                }
+                                Repeater {
+                                    model: root.skillList
+                                    ColumnLayout {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        Layout.topMargin: 4
+                                        spacing: 2
+                                        Text {
+                                            text: modelData.name
+                                            color: Theme.text
+                                            font.pixelSize: 13
+                                            font.weight: Font.DemiBold
+                                        }
+                                        Text {
+                                            text: modelData.description === "" ? "No description: add one to SKILL.md so the model knows when to use it."
+                                                                               : modelData.description
+                                            color: modelData.description === "" ? Theme.warning : Theme.muted
+                                            font.pixelSize: 12
+                                            wrapMode: Text.Wrap
+                                            Layout.fillWidth: true
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 4 — Advanced
                 ScrollView {
                     clip: true
                     contentWidth: availableWidth
@@ -1395,7 +1510,7 @@ Popup {
                     }
                 }
 
-                // 4 — About
+                // 5 — About
                 ScrollView {
                     clip: true
                     contentWidth: availableWidth

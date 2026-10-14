@@ -46,6 +46,10 @@ class SettingsController : public QObject
     Q_PROPERTY(bool navChatsOpen READ navChatsOpen WRITE setNavChatsOpen NOTIFY navigatorStateChanged)
     Q_PROPERTY(bool enableArtifacts READ enableArtifacts WRITE setEnableArtifacts NOTIFY enableArtifactsChanged)
     Q_PROPERTY(bool includeLocalTime READ includeLocalTime WRITE setIncludeLocalTime NOTIFY includeLocalTimeChanged)
+    // Lets the model run commands (run_command), each one approved by the user. Off by default.
+    Q_PROPERTY(bool shellEnabled READ shellEnabled WRITE setShellEnabled NOTIFY shellEnabledChanged)
+    Q_PROPERTY(QString skillsFolder READ skillsFolder CONSTANT)
+    Q_PROPERTY(QString skillsShellName READ skillsShellName CONSTANT)
     Q_PROPERTY(QString officeBinaryPath READ officeBinaryPath WRITE setOfficeBinaryPath NOTIFY officeBinaryPathChanged)
     Q_PROPERTY(QString officeDetectedPath READ officeDetectedPath CONSTANT)
     Q_PROPERTY(QString pdftotextBinaryPath READ pdftotextBinaryPath WRITE setPdftotextBinaryPath NOTIFY pdftotextBinaryPathChanged)
@@ -139,6 +143,14 @@ public:
     void setEnableArtifacts(bool v);
     bool includeLocalTime() const { return m_includeLocalTime; }
     void setIncludeLocalTime(bool v);
+    bool shellEnabled() const { return m_shellEnabled; }
+    void setShellEnabled(bool v);
+    QString skillsFolder() const;
+    QString skillsShellName() const;
+    // The installed skills, read afresh: [{name, description, folder}].
+    Q_INVOKABLE QVariantList skillsSnapshot() const;
+    // Opens the skills folder in the file manager, creating it first.
+    Q_INVOKABLE void openSkillsFolder();
     QString officeBinaryPath() const { return m_officeBinaryPath; }
     void setOfficeBinaryPath(const QString &p);
     QString officeDetectedPath() const;
@@ -220,6 +232,7 @@ signals:
     void navigatorStateChanged();
     void enableArtifactsChanged();
     void includeLocalTimeChanged();
+    void shellEnabledChanged();
     void officeBinaryPathChanged();
     void pdftotextBinaryPathChanged();
     void compactionThresholdChanged();
@@ -273,6 +286,7 @@ private:
     bool m_navChatsOpen = false;
     bool m_enableArtifacts = true;
     bool m_includeLocalTime = true;
+    bool m_shellEnabled = false;
     QString m_officeBinaryPath;
     QString m_pdftotextBinaryPath;
     int m_compactionThreshold = 80;

@@ -19,14 +19,16 @@ Popup {
     ColumnLayout {
         width: parent.width
         spacing: 10
+        readonly property bool shell: chat.permissionKind === "shell"
         Text {
-            text: "Allow MCP tool?"
+            text: parent.shell ? "Run this command?" : "Allow MCP tool?"
             color: Theme.text
             font.pixelSize: 16
             font.bold: true
         }
         Text {
-            text: chat.permissionServer + " / " + chat.permissionTool
+            text: parent.shell ? "In " + chat.permissionServer + " on this computer, as you"
+                               : chat.permissionServer + " / " + chat.permissionTool
             color: Theme.accent
             font.pixelSize: 13
             wrapMode: Text.Wrap
@@ -51,7 +53,8 @@ Popup {
             Item { Layout.fillWidth: true }
             Button { text: "Once"; onClicked: chat.resolvePermission("once") }
             Button { text: "This chat"; onClicked: chat.resolvePermission("chat") }
-            Button { text: "Always"; onClicked: chat.resolvePermission("always") }
+            // Commands are never allowed for good: each new chat asks again.
+            Button { visible: !parent.parent.shell; text: "Always"; onClicked: chat.resolvePermission("always") }
         }
     }
 }

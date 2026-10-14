@@ -22,6 +22,10 @@
 #include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QtTest>
+
+#ifdef Q_OS_UNIX
+#include <signal.h>
+#endif
 #include <functional>
 #include <memory>
 
@@ -395,6 +399,45 @@ QString systemText(const QJsonObject &request)
 {
     const QJsonArray msgs = request.value(QStringLiteral("messages")).toArray();
     return msgs.isEmpty() ? QString() : msgs.at(0).toObject().value(QStringLiteral("content")).toString();
+}
+
+// For the command and skill tests.
+struct ToolsOn
+{
+    SettingsController &s;
+    bool shell;
+    ToolsOn(SettingsController &settings, bool shellOn) : s(settings), shell(shellOn)
+    {
+        s.setModelTools(true);
+        s.setShellEnabled(shellOn);
+    }
+    ~ToolsOn()
+    {
+        s.setShellEnabled(false);
+        s.resetModelCapsFor(s.currentBackendId(), s.currentModel());
+    }
+};
+
+QStringList toolNames(const QJsonObject &request)
+{
+    QStringList out;
+    for (const QJsonValue &v : request.value(QStringLiteral("tools")).toArray())
+        out << v.toObject().value(QStringLiteral("function")).toObject().value(QStringLiteral("name")).toString();
+    return out;
+}
+QString lastToolText(Fixture &f)
+{
+    QString t;
+    for (const ChatMessage &m : f.chat->messages()->all())
+    {
+        if (m.role == QLatin1String("tool"))
+            t = m.content;
+    }
+    return t;
+}
+QString commandArgs(const QString &cmd)
+{
+    return QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("command"), cmd}}).toJson(QJsonDocument::Compact));
 }
 
 const auto numbered = [](int i, const QJsonObject &) { return FakeOpenAi::text(QStringLiteral("reply %1").arg(i + 1)); };
@@ -1344,6 +1387,184 @@ private slots:
         }
         QVERIFY2(toolText.contains(QLatin1String("exited")), qPrintable(toolText));
         QCOMPARE(f.chat->messages()->all().last().content, QStringLiteral("recovered"));
+    }
+
+    // -- Commands and skills ------------------------------------------------------
+
+    void commandsAreOffUntilTurnedOn()
+    {
+        Fixture f([](int i, const QJsonObject &)
+                  {
+                      if (i == 0)
+                          return FakeOpenAi::toolCall(QStringLiteral("run_command"), commandArgs(QStringLiteral("echo hi")));
+                      return FakeOpenAi::text(QStringLiteral("done"));
+                  });
+        QVERIFY(f.ok);
+        ToolsOn on(*f.settings, false);
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("run something")));
+        QVERIFY(!toolNames(f.ai.requests.first()).contains(QStringLiteral("run_command")));
+        QVERIFY(toolNames(f.ai.requests.first()).contains(QStringLiteral("web_fetch")));
+        QVERIFY(!f.chat->permissionOpen()); // not even asked
+        QVERIFY2(lastToolText(f).contains(QLatin1String("Running commands is turned off")), qPrintable(lastToolText(f)));
+    }
+
+    void eachCommandIsApprovedFirst()
+    {
+        if (!QFile::exists(QStringLiteral("/bin/sh")))
+            QSKIP("needs a POSIX shell");
+        Fixture f([](int i, const QJsonObject &)
+                  {
+                      if (i == 0)
+                          return FakeOpenAi::toolCall(QStringLiteral("run_command"), commandArgs(QStringLiteral("echo one")));
+                      if (i == 1)
+                          return FakeOpenAi::toolCall(QStringLiteral("run_command"), commandArgs(QStringLiteral("echo two")));
+                      if (i == 2)
+                          return FakeOpenAi::toolCall(QStringLiteral("run_command"), commandArgs(QStringLiteral("echo three")));
+                      if (i == 3)
+                          return FakeOpenAi::toolCall(QStringLiteral("run_command"), commandArgs(QStringLiteral("echo four")));
+                      return FakeOpenAi::text(QStringLiteral("done"));
+                  });
+        QVERIFY(f.ok);
+        ToolsOn on(*f.settings, true);
+        f.chat->newChat();
+        f.chat->setComposerText(QStringLiteral("run things"));
+        f.chat->send();
+
+        // Asked, with the command shown; nothing has run yet.
+        QVERIFY(waitFor([&]() { return f.chat->permissionOpen(); }));
+        QVERIFY(toolNames(f.ai.requests.first()).contains(QStringLiteral("run_command")));
+        QCOMPARE(f.chat->permissionKind(), QStringLiteral("shell"));
+        QCOMPARE(f.chat->permissionArgs(), QStringLiteral("echo one"));
+        QVERIFY(!f.roles().contains(QStringLiteral("tool")));
+
+        // "Once" runs this one only: the next command asks again.
+        f.chat->resolvePermission(QStringLiteral("once"));
+        QVERIFY(waitFor([&]() { return f.chat->permissionOpen(); }));
+        QVERIFY2(lastToolText(f).contains(QLatin1String("one\n[exit code 0]")), qPrintable(lastToolText(f)));
+        QCOMPARE(f.chat->permissionArgs(), QStringLiteral("echo two"));
+
+        // Denied: not run, and the model is told.
+        f.chat->resolvePermission(QStringLiteral("deny"));
+        QVERIFY(waitFor([&]() { return f.chat->permissionOpen(); }));
+        QCOMPARE(lastToolText(f), QStringLiteral("User denied tool call"));
+        QCOMPARE(f.chat->permissionArgs(), QStringLiteral("echo three"));
+
+        // "This chat" covers the rest of the chat without asking.
+        f.chat->resolvePermission(QStringLiteral("chat"));
+        QVERIFY(waitFor([&]() { return !f.chat->streaming(); }));
+        QVERIFY(!f.chat->permissionOpen());
+        QStringList outputs;
+        for (const ChatMessage &m : f.chat->messages()->all())
+        {
+            if (m.role == QLatin1String("tool"))
+                outputs << m.content;
+        }
+        QCOMPARE(outputs.size(), 4);
+        QVERIFY(outputs.at(2).contains(QLatin1String("three\n[exit code 0]")));
+        QVERIFY(outputs.at(3).contains(QLatin1String("four\n[exit code 0]")));
+        QCOMPARE(f.chat->messages()->all().last().content, QStringLiteral("done"));
+
+        // A new chat asks again: commands are never allowed for good.
+        f.chat->newChat();
+        f.ai.requests.clear();
+        f.chat->setComposerText(QStringLiteral("again"));
+        f.chat->send(); // the fake starts over: "echo one" again
+        QVERIFY(waitFor([&]() { return f.chat->permissionOpen(); }));
+        QCOMPARE(f.chat->permissionArgs(), QStringLiteral("echo one"));
+        f.chat->stop();
+        QVERIFY(!f.chat->permissionOpen());
+    }
+
+    void stoppingKillsARunningCommand()
+    {
+        if (!QFile::exists(QStringLiteral("/bin/sh")))
+            QSKIP("needs a POSIX shell");
+        Fixture f([](int i, const QJsonObject &)
+                  {
+                      if (i == 0)
+                          return FakeOpenAi::toolCall(QStringLiteral("run_command"),
+                                                      commandArgs(QStringLiteral("echo $$ > \"$SHAMMY_TEST_PIDFILE\"; sleep 30")));
+                      return FakeOpenAi::text(QStringLiteral("late"));
+                  });
+        QVERIFY(f.ok);
+        QTemporaryDir dir;
+        const QString pidFile = dir.filePath(QStringLiteral("pid"));
+        qputenv("SHAMMY_TEST_PIDFILE", pidFile.toUtf8());
+        ToolsOn on(*f.settings, true);
+        f.chat->newChat();
+        f.chat->setComposerText(QStringLiteral("wait"));
+        f.chat->send();
+        QVERIFY(waitFor([&]() { return f.chat->permissionOpen(); }));
+        f.chat->resolvePermission(QStringLiteral("once"));
+        QVERIFY(waitFor([&]() { return QFileInfo(pidFile).size() > 0; }));
+        QFile pf(pidFile);
+        QVERIFY(pf.open(QIODevice::ReadOnly));
+        const pid_t pid = pf.readAll().trimmed().toInt();
+        QVERIFY(pid > 0);
+        QVERIFY(::kill(pid, 0) == 0); // running
+        QElapsedTimer t;
+        t.start();
+        f.chat->stop();
+        QVERIFY(waitFor([&]() { return !f.chat->streaming(); }, 3000));
+        QVERIFY(t.elapsed() < 3000);
+        QTest::qWait(200);
+        QCOMPARE(f.ai.requests.size(), 1); // no reply was asked for afterwards
+        QVERIFY(waitFor([&]() { return ::kill(pid, 0) != 0; }, 3000)); // and the command is gone
+        qunsetenv("SHAMMY_TEST_PIDFILE");
+    }
+
+    void skillsAreListedAndLoaded()
+    {
+        QTemporaryDir cfg;
+        QVERIFY(cfg.isValid());
+        QDir().mkpath(cfg.filePath(QStringLiteral("shammy/skills/greeter")));
+        QFile skill(cfg.filePath(QStringLiteral("shammy/skills/greeter/SKILL.md")));
+        QVERIFY(skill.open(QIODevice::WriteOnly));
+        skill.write("---\nname: greeter\ndescription: How to greet the user properly.\n---\nAlways say ahoy.\n");
+        skill.close();
+        const QByteArray oldXdg = qgetenv("XDG_CONFIG_HOME");
+        qputenv("XDG_CONFIG_HOME", cfg.path().toUtf8());
+        struct Restore
+        {
+            QByteArray v;
+            ~Restore()
+            {
+                if (v.isEmpty())
+                    qunsetenv("XDG_CONFIG_HOME");
+                else
+                    qputenv("XDG_CONFIG_HOME", v);
+            }
+        } restore{oldXdg};
+
+        Fixture f([](int i, const QJsonObject &)
+                  {
+                      if (i == 0)
+                          return FakeOpenAi::toolCall(QStringLiteral("load_skill"), QStringLiteral("{\"name\":\"greeter\"}"));
+                      return FakeOpenAi::text(QStringLiteral("ahoy"));
+                  });
+        QVERIFY(f.ok);
+        {
+            ToolsOn on(*f.settings, false);
+            f.chat->newChat();
+            QVERIFY(f.say(QStringLiteral("hello")));
+            const QString sys = systemText(f.ai.requests.first());
+            QVERIFY2(sys.contains(QLatin1String("- greeter: How to greet the user properly.")), qPrintable(sys.right(500)));
+            QVERIFY(!sys.contains(QLatin1String("Always say ahoy"))); // loaded only when asked for
+            QVERIFY(sys.contains(QLatin1String("Running commands is turned off")));
+            QVERIFY(toolNames(f.ai.requests.first()).contains(QStringLiteral("load_skill")));
+            QVERIFY2(lastToolText(f).contains(QLatin1String("Skill: greeter")), qPrintable(lastToolText(f)));
+            QVERIFY(lastToolText(f).contains(QLatin1String("Always say ahoy.")));
+            QVERIFY(!f.chat->permissionOpen()); // reading a skill needs no approval
+        }
+        // A model without Tools cannot load a skill, so none are listed.
+        f.settings->setModelTools(false);
+        f.ai.requests.clear();
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("hello again")));
+        QVERIFY(!systemText(f.ai.requests.first()).contains(QLatin1String("greeter")));
+        QVERIFY(!toolNames(f.ai.requests.first()).contains(QStringLiteral("load_skill")));
+        f.settings->resetModelCapsFor(f.settings->currentBackendId(), f.settings->currentModel());
     }
 
     // -- Project files are sized to the model's context window -------------------

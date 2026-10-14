@@ -367,6 +367,7 @@ Rectangle {
                 Layout.alignment: Qt.AlignVCenter
                 Layout.preferredWidth: implicitWidth
                 text: (mcp.toolCount + (settings.modelTools ? 1 : 0)
+                       + (settings.shellEnabled ? 1 : 0)
                        + (chat.webSearchAvailable && chat.webSearch ? 1 : 0)) + " tools"
                 color: Theme.muted
                 font.pixelSize: 11

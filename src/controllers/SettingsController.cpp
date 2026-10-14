@@ -4,7 +4,10 @@
 #include "artifacts/PdfExtract.h"
 #include "compact/Compactor.h"
 #include "openai/ModelCaps.h"
+#include "shell/ShellCommand.h"
+#include "skills/Skills.h"
 
+#include <QDesktopServices>
 #include <QDir>
 #include <QSet>
 #include <QUrl>
@@ -35,6 +38,7 @@ SettingsController::SettingsController(Store *store, OpenAiClient *client, QObje
     m_navChatsOpen = m_qs.value(QStringLiteral("navChatsOpen"), false).toBool();
     m_enableArtifacts = m_qs.value(QStringLiteral("enableArtifacts"), true).toBool();
     m_includeLocalTime = m_qs.value(QStringLiteral("includeLocalTime"), true).toBool();
+    m_shellEnabled = m_qs.value(QStringLiteral("shellEnabled"), false).toBool();
     m_officeBinaryPath = m_qs.value(QStringLiteral("officeBinaryPath")).toString().trimmed();
     m_pdftotextBinaryPath = m_qs.value(QStringLiteral("pdftotextBinaryPath")).toString().trimmed();
     m_compactionThreshold = Compact::clampThreshold(
@@ -562,6 +566,40 @@ void SettingsController::setIncludeLocalTime(bool v)
 {
     setBoolPref(&m_includeLocalTime, QStringLiteral("includeLocalTime"), v,
                 &SettingsController::includeLocalTimeChanged);
+}
+
+void SettingsController::setShellEnabled(bool v)
+{
+    setBoolPref(&m_shellEnabled, QStringLiteral("shellEnabled"), v, &SettingsController::shellEnabledChanged);
+}
+
+QString SettingsController::skillsFolder() const
+{
+    return Skills::defaultRoot();
+}
+
+QString SettingsController::skillsShellName() const
+{
+    return ShellCommand::shellName();
+}
+
+QVariantList SettingsController::skillsSnapshot() const
+{
+    QVariantList out;
+    for (const Skills::Skill &s : Skills::discover(Skills::defaultRoot()))
+    {
+        out << QVariantMap{{QStringLiteral("name"), s.name},
+                           {QStringLiteral("description"), s.description},
+                           {QStringLiteral("folder"), s.dir}};
+    }
+    return out;
+}
+
+void SettingsController::openSkillsFolder()
+{
+    const QString dir = Skills::defaultRoot();
+    QDir().mkpath(dir);
+    QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
 }
 
 void SettingsController::setOfficeBinaryPath(const QString &p)

@@ -14,6 +14,7 @@ C++20, CMake, Qt 6.4+ Quick. MIT licensed.
 - Projects: instructions, file attachments, scoped chats
 - Artifacts: tagged blocks plus large HTML/SVG/JS fences, versioned side pane
 - Local MCP over stdio (Claude Desktop `mcpServers` schema), tool loop, permission prompts
+- Agent skills (`SKILL.md` folders) and shell commands, each command approved first
 - Markdown bubbles, code copy, regenerate / edit-resend, stop
 - Text and image attachments (vision as `image_url` data URLs), plus Word, spreadsheet and PDF files when the tools to read them are installed
 - Thinking/reasoning deltas when the backend streams them
@@ -185,6 +186,46 @@ with a search key set (Settings → General → Web search), `web_search`.
   and every hop gets the same checks. The check cannot stop a DNS server that
   answers differently the second time (DNS rebinding); it narrows that window
   but does not close it.
+
+## Skills and commands
+
+A skill is a folder holding a `SKILL.md`, in the same format other agent
+harnesses use. Skills live in `~/.config/shammy/skills/` on Linux and macOS
+alike (`$XDG_CONFIG_HOME/shammy/skills/` when that is set):
+
+```
+~/.config/shammy/skills/
+  sm-inventory/
+    SKILL.md          name and description up top, then the instructions
+    scripts/          anything else the instructions refer to
+  weather/
+    SKILL.md
+```
+
+```markdown
+---
+name: weather
+description: Look up the forecast for a city. Use when asked about the weather.
+---
+Run `curl -s "wttr.in/<city>?format=3"` and report the result.
+```
+
+- **What the model sees:** only each skill's name and description, in the
+  system prompt. When a request matches, it loads the instructions, or another
+  file from the skill's folder, with the `load_skill` tool. Folders are read
+  again for every reply, so a new or edited skill is picked up at once.
+- **Needs Tools:** skills are offered only to a model with Tools on.
+- **Running commands** (`run_command`) is off until turned on in
+  Settings → Skills. Every command is shown before it runs; allow it once or
+  for the rest of the chat. Nothing is allowed for good: each new chat asks
+  again. Commands run in your shell (`$SHELL` when it is bash, zsh, sh, dash
+  or ksh, else `/bin/sh`), in your home folder unless the model names another,
+  with nothing on standard input, so a command that prompts for input fails.
+  The model is told which system it is on, so it can write commands for the
+  BSD tools on macOS.
+- **Limits:** a command is stopped after 120 seconds, together with anything
+  it started; its output is kept to 32 KB (the start and the end), less for a
+  small context window. Stop ends a running command too.
 
 ## Contributing
 

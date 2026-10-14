@@ -65,6 +65,10 @@ set(CORE_SOURCES
     src/compact/Compactor.h
     src/import/ClaudeChatMerge.cpp
     src/import/ClaudeChatMerge.h
+    src/skills/Skills.cpp
+    src/skills/Skills.h
+    src/shell/ShellCommand.cpp
+    src/shell/ShellCommand.h
     src/websearch/WebSearch.cpp
     src/websearch/WebSearch.h
     src/Util.h
