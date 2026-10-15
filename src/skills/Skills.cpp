@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QRegularExpression>
+#include <QSet>
 
 #include <algorithm>
 
@@ -81,12 +82,33 @@ QStringList otherFiles(const QString &dir)
 }
 } // namespace
 
-QString defaultRoot()
+// $XDG_CONFIG_HOME/shammy/skills, else ~/.config/shammy/skills.
+static QString xdgRoot()
 {
     QString base = qEnvironmentVariable("XDG_CONFIG_HOME");
     if (base.isEmpty() || !QDir::isAbsolutePath(base))
         base = QDir::homePath() + QStringLiteral("/.config");
     return base + QStringLiteral("/shammy/skills");
+}
+
+QString defaultRoot()
+{
+#if defined(Q_OS_MACOS)
+    // Next to config.json, where the rest of Shammy's own files live on a Mac.
+    return QDir::homePath() + QStringLiteral("/Library/Application Support/Shammy/skills");
+#else
+    return xdgRoot();
+#endif
+}
+
+QStringList roots()
+{
+#if defined(Q_OS_MACOS)
+    // Mac tools keep their settings in either place, so the XDG folder is read too.
+    return {defaultRoot(), xdgRoot()};
+#else
+    return {defaultRoot()};
+#endif
 }
 
 void parseFrontMatter(const QString &text, QString *name, QString *description)
@@ -154,6 +176,26 @@ QList<Skill> discover(const QString &root)
         if (s.description.size() > kMaxDescription)
             s.description = s.description.left(kMaxDescription - 1) + QChar(0x2026);
         out << s;
+    }
+    std::sort(out.begin(), out.end(), [](const Skill &a, const Skill &b) { return a.name < b.name; });
+    return out;
+}
+
+QList<Skill> discover(const QStringList &roots)
+{
+    QList<Skill> out;
+    QSet<QString> seen;
+    for (const QString &root : roots)
+    {
+        // A name already found in an earlier root hides this one.
+        for (const Skill &s : discover(root))
+        {
+            if (!seen.contains(s.name))
+            {
+                seen.insert(s.name);
+                out << s;
+            }
+        }
     }
     std::sort(out.begin(), out.end(), [](const Skill &a, const Skill &b) { return a.name < b.name; });
     return out;

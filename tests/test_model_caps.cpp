@@ -42,6 +42,27 @@ private slots:
         QCOMPARE(loadedContextFromOllamaPs("{\"models\":[]}", QStringLiteral("llama3.2")), 0);
     }
 
+    void ollamaRefusalsAreExplained()
+    {
+        // The wording seen from Ollama 0.15 with a GGUF pulled from Hugging Face.
+        const QString tools = QStringLiteral("hf.co/LiquidAI/LFM2.5-24B-A2B-GGUF:Q4_0 does not support tools (HTTP 400)");
+        const QString t = explainServerError(tools, QStringLiteral("ollama local"), QStringLiteral("hf.co/LiquidAI/LFM2.5-24B-A2B-GGUF:Q4_0"));
+        QVERIFY(t.startsWith(QLatin1String("ollama local turned the request down because the chat template it uses for "
+                                           "hf.co/LiquidAI/LFM2.5-24B-A2B-GGUF:Q4_0 has no tool support")));
+        QVERIFY(t.contains(QStringLiteral("Tools is on for this model in Settings → Models")));
+        QVERIFY(t.endsWith(QStringLiteral("(ollama local said: ") + tools + QLatin1Char(')')));
+
+        const QString think = QStringLiteral("\"gemma3:4b\" does not support thinking (HTTP 400)");
+        const QString k = explainServerError(think, QString(), QStringLiteral("gemma3:4b"));
+        QVERIFY(k.startsWith(QLatin1String("The server turned the request down because it does not support thinking for gemma3:4b.")));
+        QVERIFY(k.endsWith(QStringLiteral("(The server said: ") + think + QLatin1Char(')')));
+
+        // Anything else is left as it was.
+        for (const QString &other : {QStringLiteral("model exploded (HTTP 500)"), QStringLiteral("connection refused"),
+                                     QStringLiteral("this does not support toolsets"), QString()})
+            QCOMPARE(explainServerError(other, QStringLiteral("x"), QStringLiteral("y")), other);
+    }
+
     void nameVision()
     {
         QVERIFY(capsFromModelId(QStringLiteral("llava:7b")).vision);

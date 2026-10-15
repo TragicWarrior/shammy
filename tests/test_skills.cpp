@@ -45,7 +45,19 @@ private slots:
     {
         const QByteArray old = qgetenv("XDG_CONFIG_HOME");
         qputenv("XDG_CONFIG_HOME", "/tmp/xdg-test");
+#if defined(Q_OS_MACOS)
+        // A Mac keeps skills beside config.json first, and reads the XDG folder after it.
+        QCOMPARE(Skills::defaultRoot(),
+                 QDir::homePath() + QStringLiteral("/Library/Application Support/Shammy/skills"));
+        QCOMPARE(Skills::roots(), (QStringList{Skills::defaultRoot(), QStringLiteral("/tmp/xdg-test/shammy/skills")}));
+        qunsetenv("XDG_CONFIG_HOME");
+        QCOMPARE(Skills::roots().value(1), QDir::homePath() + QStringLiteral("/.config/shammy/skills"));
+        if (!old.isEmpty())
+            qputenv("XDG_CONFIG_HOME", old);
+        return;
+#endif
         QCOMPARE(Skills::defaultRoot(), QStringLiteral("/tmp/xdg-test/shammy/skills"));
+        QCOMPARE(Skills::roots(), QStringList{Skills::defaultRoot()});
         qputenv("XDG_CONFIG_HOME", "relative/ignored");
         QCOMPARE(Skills::defaultRoot(), QDir::homePath() + QStringLiteral("/.config/shammy/skills"));
         qunsetenv("XDG_CONFIG_HOME");
@@ -84,6 +96,37 @@ private slots:
         QCOMPARE(skills.at(2).description, QStringLiteral("Look up the forecast for a city."));
         QCOMPARE(skills.at(0).description, QString());
         QVERIFY(Skills::discover(m_dir.filePath(QStringLiteral("missing"))).isEmpty());
+    }
+
+    void discoverMergesRootsEarlierFirst()
+    {
+        // A second root with its own skill and another copy of "weather".
+        const QString other = m_dir.filePath(QStringLiteral("fallback"));
+        QDir().mkpath(other + QStringLiteral("/weather"));
+        QDir().mkpath(other + QStringLiteral("/alpha"));
+        QFile w(other + QStringLiteral("/weather/SKILL.md"));
+        QVERIFY(w.open(QIODevice::WriteOnly));
+        w.write("---\nname: weather\ndescription: The fallback copy.\n---\n");
+        w.close();
+        QFile a(other + QStringLiteral("/alpha/SKILL.md"));
+        QVERIFY(a.open(QIODevice::WriteOnly));
+        a.write("---\nname: alpha\ndescription: Only in the fallback.\n---\n");
+        a.close();
+
+        const auto skills = Skills::discover(QStringList{root(), other});
+        QStringList names;
+        for (const auto &s : skills)
+            names << s.name;
+        QCOMPARE(names, (QStringList{QStringLiteral("alpha"), QStringLiteral("bare"), QStringLiteral("sm-inventory"),
+                                     QStringLiteral("weather")}));
+        QCOMPARE(skills.at(0).dir, other + QStringLiteral("/alpha"));
+        QCOMPARE(skills.at(3).description, QStringLiteral("Look up the forecast for a city."));
+        QCOMPARE(skills.at(3).dir, root() + QStringLiteral("/weather"));
+
+        // In the other order the fallback's copy wins.
+        const auto swapped = Skills::discover(QStringList{other, root()});
+        QCOMPARE(swapped.at(3).description, QStringLiteral("The fallback copy."));
+        QDir(other).removeRecursively();
     }
 
     void promptListsNamesAndDescriptions()

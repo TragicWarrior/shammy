@@ -3,8 +3,10 @@
 #include <QJsonObject>
 #include <QList>
 #include <QString>
+#include <QStringList>
 
-// Agent skills: folders under ~/.config/shammy/skills/ (on macOS too), each
+// Agent skills: folders under ~/.config/shammy/skills/ (on macOS,
+// ~/Library/Application Support/Shammy/skills/, then ~/.config/...), each
 // holding a SKILL.md whose front matter names and describes it:
 //
 //   ---
@@ -25,12 +27,21 @@ struct Skill
     QString dir;         // absolute path of the skill's folder
 };
 
-// $XDG_CONFIG_HOME/shammy/skills, else ~/.config/shammy/skills.
+// $XDG_CONFIG_HOME/shammy/skills, else ~/.config/shammy/skills; on macOS,
+// ~/Library/Application Support/Shammy/skills.
 QString defaultRoot();
+
+// The folders skills are read from, in order: defaultRoot(), then on macOS the
+// XDG folder above as a fallback.
+QStringList roots();
 
 // The skills under `root`, sorted by name. A folder without a SKILL.md is not
 // a skill and is skipped.
 QList<Skill> discover(const QString &root);
+
+// The skills under all of `roots`, sorted by name. When two roots hold a skill
+// of the same name, the earlier root's is kept.
+QList<Skill> discover(const QStringList &roots);
 
 // Reads `name:` and `description:` from SKILL.md front matter. Exposed for tests.
 void parseFrontMatter(const QString &text, QString *name, QString *description);

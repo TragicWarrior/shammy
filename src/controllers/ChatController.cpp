@@ -1,4 +1,5 @@
 #include "controllers/ChatController.h"
+#include "openai/ModelCaps.h"
 #include "Util.h"
 #include "artifacts/ArtifactExtractor.h"
 #include "artifacts/Attach.h"
@@ -621,7 +622,9 @@ void ChatController::openConversation(const QString &id)
     // Restore this chat's exact backend+model pairing.
     const QString convBackend = c.backendId.isEmpty() ? m_settings->currentBackendId() : c.backendId;
     const QString convModel = c.model.isEmpty() ? m_settings->currentModel() : c.model;
-    m_settings->setCurrentBackendModel(convBackend, convModel);
+    // Unless that model has since been hidden: then the chat carries on with the one selected.
+    if (!m_settings->modelHidden(convBackend, convModel))
+        m_settings->setCurrentBackendModel(convBackend, convModel);
     m_thinkingMode = c.reasoningEffort;
     emit thinkingModeChanged();
     emit conversationChanged();
@@ -1630,8 +1633,9 @@ void ChatController::startGeneration()
                                                : m_store->backend(m_genBackendId);
     req.baseUrl = b.baseUrl;
     req.apiKey = b.apiKey;
+    req.ollamaNative = m_settings->backendIsOllama(b.id);
     req.model = m_genModel;
-    m_skills = Skills::discover(Skills::defaultRoot());
+    m_skills = Skills::discover(Skills::roots());
     req.messages = apiHistory();
     if (m_forceFinalWrite)
         req.tools = {};
@@ -2227,7 +2231,7 @@ void ChatController::onFailed(const QString &err)
     finishInterruptedReply();
     if (m_genAttached)
     {
-        setError(err);
+        setError(explainServerError(err, m_store->backend(m_genBackendId).name, m_genModel));
     }
     endGeneration();
 }
@@ -2799,6 +2803,7 @@ void ChatController::startCompact(const QString &extra, bool automatic)
     const Backend b = m_settings->currentBackend();
     req.baseUrl = b.baseUrl;
     req.apiKey = b.apiKey;
+    req.ollamaNative = m_settings->backendIsOllama(b.id);
     req.model = m_settings->currentModel();
     req.messages = Compact::summaryRequest(Compact::transcript(m_pendingPlan.summarized), extra);
     req.temperature = 0.2;

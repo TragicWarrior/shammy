@@ -1,6 +1,7 @@
 #pragma once
 
 #include "openai/ChatTypes.h"
+#include "openai/OllamaNative.h"
 #include "openai/SseParser.h"
 
 #include <QByteArray>
@@ -28,6 +29,8 @@ public:
     // Asks an Ollama server what context size it loaded `model` with.
     void probeLoadedContext(const QString &baseUrl, const QString &apiKey, const QString &backendId,
                             const QString &model);
+    // Asks whether the server is Ollama (it alone answers /api/version).
+    void detectOllama(const QString &baseUrl, const QString &apiKey, const QString &backendId);
     void streamChat(const ChatRequest &req);
     void completeChat(const ChatRequest &req);
     void abort();
@@ -36,6 +39,7 @@ public:
 
 signals:
     void modelsListed(const QString &backendId, const QStringList &ids, const QString &error);
+    void ollamaDetected(const QString &backendId, bool isOllama);
     // `context` is 0 when the server is not Ollama, or has not loaded the model.
     void loadedContextProbed(const QString &backendId, const QString &model, int context);
     void modelProbed(const QString &model, bool vision, bool tools, bool thinking, bool audio,
@@ -68,6 +72,8 @@ private:
     QNetworkReply *m_reply = nullptr;
     QNetworkReply *m_completeReply = nullptr;
     SseParser m_parser;
+    OllamaNative::StreamParser m_ndjson;
+    bool m_native = false; // the reply being read is Ollama's own stream
     QTimer m_idleTimer;
     bool m_gotDone = false;
     bool m_aborted = false;

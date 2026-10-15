@@ -49,6 +49,9 @@ struct ChatRequest
     int contextSize = 16384;
     QString reasoningEffort;
     bool stream = true;
+    // Send to Ollama's own /api/chat rather than /v1/chat/completions (which
+    // ignores the context size). Set for backends that answered /api/version.
+    bool ollamaNative = false;
 };
 
 struct ModelCaps

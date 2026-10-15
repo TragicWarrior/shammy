@@ -17,6 +17,9 @@ class SettingsController : public QObject
     Q_OBJECT
     Q_PROPERTY(BackendListModel *backends READ backends CONSTANT)
     Q_PROPERTY(ModelListModel *models READ models CONSTANT)
+    // The models the picker offers: `models` less the hidden ones.
+    Q_PROPERTY(QAbstractItemModel *pickerModels READ pickerModels CONSTANT)
+    Q_PROPERTY(int currentPickerIndex READ currentPickerIndex NOTIFY currentModelIndexChanged)
     Q_PROPERTY(QString currentBackendId READ currentBackendId WRITE setCurrentBackendId NOTIFY currentBackendIdChanged)
     Q_PROPERTY(QString currentModel READ currentModel WRITE setCurrentModel NOTIFY currentModelChanged)
     Q_PROPERTY(int currentModelIndex READ currentModelIndex NOTIFY currentModelIndexChanged)
@@ -83,6 +86,13 @@ public:
 
     BackendListModel *backends() { return &m_backends; }
     ModelListModel *models() { return &m_models; }
+    QAbstractItemModel *pickerModels() { return &m_pickerModels; }
+    int currentPickerIndex() const;
+    Q_INVOKABLE void selectPickerIndex(int i);
+    // A hidden model is not offered for selection outside Settings, and is not
+    // switched to when a chat that used it is opened.
+    Q_INVOKABLE void setModelHidden(const QString &backendId, const QString &model, bool hidden);
+    bool modelHidden(const QString &backendId, const QString &model) const;
 
     QString currentBackendId() const { return m_backendId; }
     void setCurrentBackendId(const QString &id);
@@ -97,6 +107,9 @@ public:
     QString currentBackendName() const;
     QString currentBaseUrl() const;
     Backend currentBackend() const;
+    // True once the backend has answered Ollama's /api/version: chats then go
+    // to Ollama's own API, which honors the context size.
+    bool backendIsOllama(const QString &backendId) const { return m_ollamaBackends.contains(backendId); }
 
     double temperature() const { return m_temperature; }
     void setTemperature(double v);
@@ -268,9 +281,11 @@ private:
     OpenAiClient *m_client = nullptr;
     BackendListModel m_backends;
     ModelListModel m_models;
+    PickerModelsProxy m_pickerModels{&m_models};
     QMap<QString, QStringList> m_backendModels;
     QMap<QString, QString> m_backendErrors;
     QSet<QString> m_pendingBackends;
+    QSet<QString> m_ollamaBackends;
     QString m_backendId;
     QString m_model;
     double m_temperature = 0.7;

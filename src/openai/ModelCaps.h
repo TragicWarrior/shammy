@@ -15,4 +15,10 @@ QUrl ollamaShowUrl(const QString &baseUrl);
 // really in use: Ollama ignores `num_ctx` on its OpenAI-compatible route, so it
 // can be much smaller than the one set here.
 QUrl ollamaPsUrl(const QString &baseUrl);
+
+// Ollama refuses a request outright when it asks for something its template for
+// the model lacks ("<model> does not support tools"), which reads as if the
+// model could not. This says what is going on and what to change in Shammy,
+// keeping Ollama's own words; any other error comes back unchanged.
+QString explainServerError(const QString &error, const QString &backendName, const QString &model);
 int loadedContextFromOllamaPs(const QByteArray &json, const QString &model);

@@ -706,6 +706,7 @@ Popup {
                                 required property bool capAdvertised
                                 required property bool capOverridden
                                 required property string contextLabel
+                                required property bool hidden
                                 Layout.fillWidth: true
                                 Layout.leftMargin: 24
                                 Layout.rightMargin: 24
@@ -722,8 +723,8 @@ Popup {
                                         Layout.fillWidth: true
                                         Text {
                                             Layout.fillWidth: true
-                                            text: label
-                                            color: Theme.text
+                                            text: label + (hidden ? "  (hidden)" : "")
+                                            color: hidden ? Theme.muted : Theme.text
                                             font.pixelSize: 13
                                             font.weight: Font.DemiBold
                                             elide: Text.ElideRight
@@ -758,34 +759,58 @@ Popup {
                                             }
                                         }
                                     }
-                                    Flow {
+                                    RowLayout {
                                         Layout.fillWidth: true
                                         spacing: 8
-                                        Repeater {
-                                            model: [
-                                                { feat: "vision", label: "Vision", on: capVision },
-                                                { feat: "tools", label: "Tools", on: capTools },
-                                                { feat: "thinking", label: "Thinking", on: capThinking },
-                                                { feat: "audio", label: "Audio", on: capAudio }
-                                            ]
-                                            Rectangle {
-                                                required property var modelData
-                                                width: chipLab.implicitWidth + 26
-                                                height: 30
-                                                radius: 15
-                                                color: modelData.on ? Theme.text : Theme.hover
-                                                Text {
-                                                    id: chipLab
-                                                    anchors.centerIn: parent
-                                                    text: modelData.label
-                                                    color: modelData.on ? Theme.bg : Theme.text
-                                                    font.pixelSize: 12
+                                        Flow {
+                                            Layout.fillWidth: true
+                                            spacing: 8
+                                            Repeater {
+                                                model: [
+                                                    { feat: "vision", label: "Vision", on: capVision },
+                                                    { feat: "tools", label: "Tools", on: capTools },
+                                                    { feat: "thinking", label: "Thinking", on: capThinking },
+                                                    { feat: "audio", label: "Audio", on: capAudio }
+                                                ]
+                                                Rectangle {
+                                                    required property var modelData
+                                                    width: chipLab.implicitWidth + 26
+                                                    height: 30
+                                                    radius: 15
+                                                    color: modelData.on ? Theme.text : Theme.hover
+                                                    Text {
+                                                        id: chipLab
+                                                        anchors.centerIn: parent
+                                                        text: modelData.label
+                                                        color: modelData.on ? Theme.bg : Theme.text
+                                                        font.pixelSize: 12
+                                                    }
+                                                    MouseArea {
+                                                        anchors.fill: parent
+                                                        cursorShape: Qt.PointingHandCursor
+                                                        onClicked: settings.setModelCap(backendId, name, modelData.feat, !modelData.on)
+                                                    }
                                                 }
-                                                MouseArea {
-                                                    anchors.fill: parent
-                                                    cursorShape: Qt.PointingHandCursor
-                                                    onClicked: settings.setModelCap(backendId, name, modelData.feat, !modelData.on)
-                                                }
+                                            }
+                                        }
+                                        // Kept out of the model picker, so it cannot be chosen by mistake.
+                                        Rectangle {
+                                            Layout.alignment: Qt.AlignRight | Qt.AlignTop
+                                            Layout.preferredWidth: hideLab.implicitWidth + 26
+                                            Layout.preferredHeight: 30
+                                            radius: 15
+                                            color: hidden ? Theme.text : Theme.hover
+                                            Text {
+                                                id: hideLab
+                                                anchors.centerIn: parent
+                                                text: "Hide from selection"
+                                                color: hidden ? Theme.bg : Theme.text
+                                                font.pixelSize: 12
+                                            }
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: settings.setModelHidden(backendId, name, !hidden)
                                             }
                                         }
                                     }

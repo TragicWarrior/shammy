@@ -90,11 +90,16 @@ ApplicationWindow {
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.left: parent.left
                         anchors.leftMargin: 16
-                        implicitWidth: Math.min(360, modelLabel.implicitWidth + 36)
+                        // As wide as the name (its padding holds the arrow), up to half the
+                        // header; a longer name is shortened in the middle, keeping the
+                        // backend and the quantization tag.
+                        leftPadding: 0
+                        rightPadding: 0
+                        implicitWidth: Math.min(Math.max(360, parent.width * 0.5), modelLabel.implicitWidth)
                         width: implicitWidth
-                        model: settings.models
+                        model: settings.pickerModels
                         textRole: "label"
-                        currentIndex: settings.currentModelIndex
+                        currentIndex: settings.currentPickerIndex
                         displayText: {
                             if (!settings.currentModel.length)
                                 return "Select model"
@@ -102,12 +107,12 @@ ApplicationWindow {
                                 ? (settings.currentBackendName + " / " + settings.currentModel)
                                 : settings.currentModel
                         }
-                        onActivated: settings.selectModelIndex(currentIndex)
+                        onActivated: settings.selectPickerIndex(currentIndex)
                         Connections {
                             target: settings
                             function onCurrentModelIndexChanged() {
-                                if (modelBox.currentIndex !== settings.currentModelIndex)
-                                    modelBox.currentIndex = settings.currentModelIndex
+                                if (modelBox.currentIndex !== settings.currentPickerIndex)
+                                    modelBox.currentIndex = settings.currentPickerIndex
                             }
                         }
                         background: Rectangle {
@@ -122,6 +127,7 @@ ApplicationWindow {
                             font.pixelSize: 14
                             font.weight: Font.DemiBold
                             verticalAlignment: Text.AlignVCenter
+                            elide: Text.ElideMiddle
                             leftPadding: 10
                             rightPadding: 22
                         }
@@ -132,6 +138,48 @@ ApplicationWindow {
                             anchors.rightMargin: 8
                             anchors.verticalCenter: parent.verticalCenter
                             font.pixelSize: 12
+                        }
+                        // The list opens below, in the theme of Shammy's other menus, and
+                        // wider than the closed control so that long names fit.
+                        delegate: ItemDelegate {
+                            id: modelItem
+                            required property int index
+                            required property string label
+                            width: modelBox.popup.availableWidth
+                            implicitHeight: 34
+                            highlighted: modelBox.highlightedIndex === index
+                            contentItem: Text {
+                                text: modelItem.label
+                                color: Theme.text
+                                font.pixelSize: 13
+                                font.weight: modelItem.index === modelBox.currentIndex ? Font.DemiBold : Font.Normal
+                                elide: Text.ElideMiddle
+                                verticalAlignment: Text.AlignVCenter
+                                leftPadding: 4
+                            }
+                            background: Rectangle {
+                                radius: 8
+                                color: modelItem.highlighted || modelItem.hovered ? Theme.hover : "transparent"
+                            }
+                        }
+                        popup: Popup {
+                            y: modelBox.height + 4
+                            width: Math.max(modelBox.width, Math.min(560, modelBox.parent.width - 2 * modelBox.x))
+                            implicitHeight: Math.min(contentItem.implicitHeight + 2 * padding, 420)
+                            padding: 6
+                            contentItem: ListView {
+                                clip: true
+                                implicitHeight: contentHeight
+                                model: modelBox.popup.visible ? modelBox.delegateModel : null
+                                currentIndex: modelBox.highlightedIndex
+                                ScrollIndicator.vertical: ScrollIndicator {}
+                            }
+                            background: Rectangle {
+                                color: Theme.sidebar
+                                radius: 12
+                                border.color: Theme.border
+                                border.width: 1
+                            }
                         }
                     }
                     Item {

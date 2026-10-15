@@ -103,6 +103,13 @@ SettingsController::SettingsController(Store *store, OpenAiClient *client, QObje
                 }
             });
     connect(m_client, &OpenAiClient::modelProbed, this, &SettingsController::onModelProbed);
+    connect(m_client, &OpenAiClient::ollamaDetected, this, [this](const QString &backendId, bool isOllama)
+    {
+        if (isOllama)
+            m_ollamaBackends.insert(backendId);
+        else
+            m_ollamaBackends.remove(backendId);
+    });
     connect(m_client, &OpenAiClient::loadedContextProbed, this, &SettingsController::onLoadedContextProbed);
     connect(this, &SettingsController::contextSizeChanged, this, &SettingsController::contextWarningChanged);
     refreshModels();
@@ -188,6 +195,55 @@ void SettingsController::setCurrentBackendModel(const QString &backendId, const 
 int SettingsController::currentModelIndex() const
 {
     return m_models.indexOf(m_backendId, m_model);
+}
+
+int SettingsController::currentPickerIndex() const
+{
+    const int row = m_models.indexOf(m_backendId, m_model);
+    return row < 0 ? -1 : m_pickerModels.mapFromSource(m_models.index(row)).row();
+}
+
+void SettingsController::selectPickerIndex(int i)
+{
+    const QModelIndex src = m_pickerModels.mapToSource(m_pickerModels.index(i, 0));
+    if (src.isValid())
+    {
+        selectModelIndex(src.row());
+    }
+}
+
+bool SettingsController::modelHidden(const QString &backendId, const QString &model) const
+{
+    return m_qs.value(QStringLiteral("modelHidden/%1/%2").arg(backendId, model), false).toBool();
+}
+
+void SettingsController::setModelHidden(const QString &backendId, const QString &model, bool hidden)
+{
+    if (backendId.isEmpty() || model.isEmpty() || modelHidden(backendId, model) == hidden)
+    {
+        return;
+    }
+    const QString key = QStringLiteral("modelHidden/%1/%2").arg(backendId, model);
+    if (hidden)
+    {
+        m_qs.setValue(key, true);
+    }
+    else
+    {
+        m_qs.remove(key);
+    }
+    m_models.updateHidden(m_models.indexOf(backendId, model), hidden);
+    emit modelsChanged();
+    emit currentModelIndexChanged();
+    // Hiding the model in use moves to the first one still offered.
+    if (hidden && backendId == m_backendId && model == m_model)
+    {
+        const int first = m_pickerModels.rowCount() > 0 ? m_pickerModels.mapToSource(m_pickerModels.index(0, 0)).row() : -1;
+        if (first >= 0)
+        {
+            selectModelIndex(first);
+        }
+    }
 }
 
 bool SettingsController::anyModelThinking() const
@@ -586,7 +642,7 @@ QString SettingsController::skillsShellName() const
 QVariantList SettingsController::skillsSnapshot() const
 {
     QVariantList out;
-    for (const Skills::Skill &s : Skills::discover(Skills::defaultRoot()))
+    for (const Skills::Skill &s : Skills::discover(Skills::roots()))
     {
         out << QVariantMap{{QStringLiteral("name"), s.name},
                            {QStringLiteral("description"), s.description},
@@ -982,8 +1038,9 @@ QString SettingsController::contextWarning() const
     }
     return QStringLiteral(
                "%1 loaded %2 with a context of %3, not the %4 set here, and cuts off whatever does not fit: "
-               "usually the instructions and tool definitions at the start. Raise the context size on the "
-               "server (Ollama ignores the one sent with a request), or lower it here to match.")
+               "usually the instructions and tool definitions at the start. The model may not take more than "
+               "%3, or the server may keep a lower limit of its own: lower the size here to match, or raise "
+               "the limit on the server.")
         .arg(currentBackendName(), m_model, formatContextSize(n), formatContextSize(contextSize()));
 }
 
@@ -1067,6 +1124,7 @@ void SettingsController::refreshModels()
     {
         m_pendingBackends.insert(b.id);
         m_client->listModels(b.baseUrl, b.apiKey, b.id);
+        m_client->detectOllama(b.baseUrl, b.apiKey, b.id);
     }
 }
 
@@ -1093,6 +1151,7 @@ void SettingsController::rebuildModelList(bool complete)
             e.overridden = overriddenFor(b.id, m);
             e.context = contextSizeFor(b.id, m);
             e.contextLabel = formatContextSize(e.context);
+            e.hidden = modelHidden(b.id, m);
             entries.append(e);
         }
     }
@@ -1103,10 +1162,12 @@ void SettingsController::rebuildModelList(bool complete)
     {
         return;
     }
-    // All enabled backends have reported: settle the selection.
-    if (m_models.indexOf(m_backendId, m_model) < 0 && !entries.isEmpty())
+    // All enabled backends have reported: settle the selection, on a model the
+    // picker offers.
+    const int row = m_models.indexOf(m_backendId, m_model);
+    if ((row < 0 || m_models.at(row).hidden) && m_pickerModels.rowCount() > 0)
     {
-        setCurrentBackendModel(entries.first().backendId, entries.first().model);
+        selectModelIndex(m_pickerModels.mapToSource(m_pickerModels.index(0, 0)).row());
     }
     else
     {

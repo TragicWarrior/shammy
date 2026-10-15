@@ -27,6 +27,8 @@ set(CORE_SOURCES
     src/openai/SseParser.cpp
     src/openai/SseParser.h
     src/openai/ToolCallXml.h
+    src/openai/OllamaNative.cpp
+    src/openai/OllamaNative.h
     src/openai/OpenAiClient.cpp
     src/openai/OpenAiClient.h
     src/openai/ChatTypes.h

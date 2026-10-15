@@ -4,6 +4,7 @@
 #include "openai/ChatTypes.h"
 
 #include <QAbstractListModel>
+#include <QSortFilterProxyModel>
 
 class BackendListModel : public QAbstractListModel
 {
@@ -75,6 +76,7 @@ public:
         bool overridden = false;
         int context = 16384;
         QString contextLabel;
+        bool hidden = false; // left out of the model picker
     };
     enum Roles
     {
@@ -89,7 +91,8 @@ public:
         CapAdvertisedRole,
         CapOverriddenRole,
         ContextRole,
-        ContextLabelRole
+        ContextLabelRole,
+        HiddenRole
     };
     explicit ModelListModel(QObject *parent = nullptr)
         : QAbstractListModel(parent)
@@ -134,6 +137,8 @@ public:
             return e.context;
         case ContextLabelRole:
             return e.contextLabel;
+        case HiddenRole:
+            return e.hidden;
         default:
             return {};
         }
@@ -151,7 +156,8 @@ public:
                 {CapAdvertisedRole, "capAdvertised"},
                 {CapOverriddenRole, "capOverridden"},
                 {ContextRole, "context"},
-                {ContextLabelRole, "contextLabel"}};
+                {ContextLabelRole, "contextLabel"},
+                {HiddenRole, "hidden"}};
     }
     void updateContext(int row, int context, const QString &label)
     {
@@ -163,6 +169,16 @@ public:
         m_items[row].contextLabel = label;
         const QModelIndex ix = index(row);
         emit dataChanged(ix, ix, {ContextRole, ContextLabelRole});
+    }
+    void updateHidden(int row, bool hidden)
+    {
+        if (row < 0 || row >= m_items.size() || m_items.at(row).hidden == hidden)
+        {
+            return;
+        }
+        m_items[row].hidden = hidden;
+        const QModelIndex ix = index(row);
+        emit dataChanged(ix, ix, {HiddenRole});
     }
     // Refresh the capability fields of one row in place (used when a probe
     // completes or the user overrides a capability).
@@ -367,4 +383,23 @@ public:
 
 private:
     QList<Row> m_items;
+};
+
+// The models offered in the model picker: all of them except those hidden in
+// Settings. Settings itself lists every model, so that they can be shown again.
+class PickerModelsProxy : public QSortFilterProxyModel
+{
+    Q_OBJECT
+public:
+    explicit PickerModelsProxy(ModelListModel *source, QObject *parent = nullptr)
+        : QSortFilterProxyModel(parent)
+    {
+        setSourceModel(source);
+    }
+
+protected:
+    bool filterAcceptsRow(int row, const QModelIndex &parent) const override
+    {
+        return !sourceModel()->index(row, 0, parent).data(ModelListModel::HiddenRole).toBool();
+    }
 };

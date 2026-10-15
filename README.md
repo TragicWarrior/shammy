@@ -88,8 +88,20 @@ a leftover `mcp.json`.
 Paste either `http://host:port` or `http://host:port/v1`. Empty API keys are
 sent as `ollama` (ignored by Ollama, often ignored by llama.cpp).
 
+A backend that answers Ollama's `/api/version` is sent chats on Ollama's own
+API (`/api/chat`), not its OpenAI-compatible one, which drops the context size.
+The per-model context size set in Settings → Models is then what Ollama loads
+the model with (up to what the model takes). Every other backend uses
+`/v1/chat/completions`.
+
 If the model list is empty, the backend is up but has nothing loaded — for
 Ollama, `ollama pull <model>`.
+
+Every model the backends list is offered in the model picker. To keep one out
+of it, turn on **Hide from selection** on that model in Settings → Models. A
+hidden model stays listed in Settings, where it can be shown again. Hiding the
+model in use switches to the first one still offered, and opening a chat that
+used a hidden model carries on with the selected model instead.
 
 ## Artifacts
 
@@ -190,8 +202,12 @@ with a search key set (Settings → General → Web search), `web_search`.
 ## Skills and commands
 
 A skill is a folder holding a `SKILL.md`, in the same format other agent
-harnesses use. Skills live in `~/.config/shammy/skills/` on Linux and macOS
-alike (`$XDG_CONFIG_HOME/shammy/skills/` when that is set):
+harnesses use. Skills live in `~/.config/shammy/skills/` on Linux
+(`$XDG_CONFIG_HOME/shammy/skills/` when that is set) and in
+`~/Library/Application Support/Shammy/skills/` on macOS, next to `config.json`.
+A Mac also reads `~/.config/shammy/skills/` after that, and when both hold a
+skill of the same name the one in `Library` is used. Settings → Skills shows
+the main folder and opens it:
 
 ```
 ~/.config/shammy/skills/
