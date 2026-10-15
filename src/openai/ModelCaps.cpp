@@ -5,6 +5,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 
 static bool hasToken(const QString &n, const QString &tok)
 {
@@ -147,4 +148,35 @@ int loadedContextFromOllamaPs(const QByteArray &json, const QString &model)
         return n > 0 ? n : 0;
     }
     return 0;
+}
+
+QString explainServerError(const QString &error, const QString &backendName, const QString &model)
+{
+    static const QRegularExpression re(QStringLiteral("does not support (tools|thinking)\\b"),
+                                       QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch m = re.match(error);
+    if (!m.hasMatch())
+    {
+        return error;
+    }
+    const QString server = backendName.trimmed().isEmpty() ? QStringLiteral("The server") : backendName.trimmed();
+    const QString name = model.trimmed().isEmpty() ? QStringLiteral("this model") : model.trimmed();
+    QString why;
+    if (m.captured(1).toLower() == QLatin1String("tools"))
+    {
+        why = QStringLiteral(
+                  "%1 turned the request down because the chat template it uses for %2 has no tool support, so "
+                  "it will not pass tools to it, even if the model itself can call them. Tools is on for this "
+                  "model in Settings → Models: switch it off to chat without tools, or serve the model with a "
+                  "template that has them (llama.cpp with --jinja uses the one inside the GGUF).")
+                  .arg(server, name);
+    }
+    else
+    {
+        why = QStringLiteral(
+                  "%1 turned the request down because it does not support thinking for %2. Set thinking to Off "
+                  "for this message, or switch Thinking off for this model in Settings → Models.")
+                  .arg(server, name);
+    }
+    return why + QStringLiteral("\n(%1 said: %2)").arg(server, error.trimmed());
 }

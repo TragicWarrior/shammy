@@ -17,6 +17,9 @@ class SettingsController : public QObject
     Q_OBJECT
     Q_PROPERTY(BackendListModel *backends READ backends CONSTANT)
     Q_PROPERTY(ModelListModel *models READ models CONSTANT)
+    // The models the picker offers: `models` less the hidden ones.
+    Q_PROPERTY(QAbstractItemModel *pickerModels READ pickerModels CONSTANT)
+    Q_PROPERTY(int currentPickerIndex READ currentPickerIndex NOTIFY currentModelIndexChanged)
     Q_PROPERTY(QString currentBackendId READ currentBackendId WRITE setCurrentBackendId NOTIFY currentBackendIdChanged)
     Q_PROPERTY(QString currentModel READ currentModel WRITE setCurrentModel NOTIFY currentModelChanged)
     Q_PROPERTY(int currentModelIndex READ currentModelIndex NOTIFY currentModelIndexChanged)
@@ -46,6 +49,10 @@ class SettingsController : public QObject
     Q_PROPERTY(bool navChatsOpen READ navChatsOpen WRITE setNavChatsOpen NOTIFY navigatorStateChanged)
     Q_PROPERTY(bool enableArtifacts READ enableArtifacts WRITE setEnableArtifacts NOTIFY enableArtifactsChanged)
     Q_PROPERTY(bool includeLocalTime READ includeLocalTime WRITE setIncludeLocalTime NOTIFY includeLocalTimeChanged)
+    // Lets the model run commands (run_command), each one approved by the user. Off by default.
+    Q_PROPERTY(bool shellEnabled READ shellEnabled WRITE setShellEnabled NOTIFY shellEnabledChanged)
+    Q_PROPERTY(QString skillsFolder READ skillsFolder CONSTANT)
+    Q_PROPERTY(QString skillsShellName READ skillsShellName CONSTANT)
     Q_PROPERTY(QString officeBinaryPath READ officeBinaryPath WRITE setOfficeBinaryPath NOTIFY officeBinaryPathChanged)
     Q_PROPERTY(QString officeDetectedPath READ officeDetectedPath CONSTANT)
     Q_PROPERTY(QString pdftotextBinaryPath READ pdftotextBinaryPath WRITE setPdftotextBinaryPath NOTIFY pdftotextBinaryPathChanged)
@@ -79,6 +86,13 @@ public:
 
     BackendListModel *backends() { return &m_backends; }
     ModelListModel *models() { return &m_models; }
+    QAbstractItemModel *pickerModels() { return &m_pickerModels; }
+    int currentPickerIndex() const;
+    Q_INVOKABLE void selectPickerIndex(int i);
+    // A hidden model is not offered for selection outside Settings, and is not
+    // switched to when a chat that used it is opened.
+    Q_INVOKABLE void setModelHidden(const QString &backendId, const QString &model, bool hidden);
+    bool modelHidden(const QString &backendId, const QString &model) const;
 
     QString currentBackendId() const { return m_backendId; }
     void setCurrentBackendId(const QString &id);
@@ -93,6 +107,9 @@ public:
     QString currentBackendName() const;
     QString currentBaseUrl() const;
     Backend currentBackend() const;
+    // True once the backend has answered Ollama's /api/version: chats then go
+    // to Ollama's own API, which honors the context size.
+    bool backendIsOllama(const QString &backendId) const { return m_ollamaBackends.contains(backendId); }
 
     double temperature() const { return m_temperature; }
     void setTemperature(double v);
@@ -139,6 +156,14 @@ public:
     void setEnableArtifacts(bool v);
     bool includeLocalTime() const { return m_includeLocalTime; }
     void setIncludeLocalTime(bool v);
+    bool shellEnabled() const { return m_shellEnabled; }
+    void setShellEnabled(bool v);
+    QString skillsFolder() const;
+    QString skillsShellName() const;
+    // The installed skills, read afresh: [{name, description, folder}].
+    Q_INVOKABLE QVariantList skillsSnapshot() const;
+    // Opens the skills folder in the file manager, creating it first.
+    Q_INVOKABLE void openSkillsFolder();
     QString officeBinaryPath() const { return m_officeBinaryPath; }
     void setOfficeBinaryPath(const QString &p);
     QString officeDetectedPath() const;
@@ -220,6 +245,7 @@ signals:
     void navigatorStateChanged();
     void enableArtifactsChanged();
     void includeLocalTimeChanged();
+    void shellEnabledChanged();
     void officeBinaryPathChanged();
     void pdftotextBinaryPathChanged();
     void compactionThresholdChanged();
@@ -255,9 +281,11 @@ private:
     OpenAiClient *m_client = nullptr;
     BackendListModel m_backends;
     ModelListModel m_models;
+    PickerModelsProxy m_pickerModels{&m_models};
     QMap<QString, QStringList> m_backendModels;
     QMap<QString, QString> m_backendErrors;
     QSet<QString> m_pendingBackends;
+    QSet<QString> m_ollamaBackends;
     QString m_backendId;
     QString m_model;
     double m_temperature = 0.7;
@@ -273,6 +301,7 @@ private:
     bool m_navChatsOpen = false;
     bool m_enableArtifacts = true;
     bool m_includeLocalTime = true;
+    bool m_shellEnabled = false;
     QString m_officeBinaryPath;
     QString m_pdftotextBinaryPath;
     int m_compactionThreshold = 80;

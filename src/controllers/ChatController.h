@@ -11,6 +11,8 @@
 #include "persist/Store.h"
 #include "artifacts/FileImport.h"
 #include "compact/Compactor.h"
+#include "shell/ShellCommand.h"
+#include "skills/Skills.h"
 #include "websearch/WebSearch.h"
 
 #include <QHash>
@@ -64,6 +66,8 @@ class ChatController : public QObject
     Q_PROPERTY(QString permissionTool READ permissionTool NOTIFY permissionChanged)
     Q_PROPERTY(QString permissionServer READ permissionServer NOTIFY permissionChanged)
     Q_PROPERTY(QString permissionArgs READ permissionArgs NOTIFY permissionChanged)
+    // "mcp", or "shell" for a command line (permissionArgs is then the command).
+    Q_PROPERTY(QString permissionKind READ permissionKind NOTIFY permissionChanged)
     Q_PROPERTY(QString searchQuery READ searchQuery WRITE setSearchQuery NOTIFY searchQueryChanged)
     Q_PROPERTY(QString emptyHint READ emptyHint NOTIFY emptyHintChanged)
     Q_PROPERTY(QString thinkingMode READ thinkingMode WRITE setThinkingMode NOTIFY thinkingModeChanged)
@@ -123,6 +127,7 @@ public:
     QString permissionTool() const { return m_permTool; }
     QString permissionServer() const { return m_permServer; }
     QString permissionArgs() const { return m_permArgs; }
+    QString permissionKind() const { return m_permKind; }
     QString searchQuery() const { return m_search; }
     void setSearchQuery(const QString &q);
     QString emptyHint() const;
@@ -303,6 +308,9 @@ private:
     ProjectController *m_projects = nullptr;
     SettingsController *m_settings = nullptr;
     WebSearch m_web;
+    ShellCommand m_shell;
+    // Read again for every reply, so that a skill added or edited is seen at once.
+    QList<Skills::Skill> m_skills;
     MessageListModel m_messages;
     ConversationListModel m_conversations;
     ConversationListModel m_favorites;
@@ -360,6 +368,9 @@ private:
     QString m_permTool;
     QString m_permServer;
     QString m_permArgs;
+    QString m_permKind;
+    // Approved with "Once": lets the call that is retried right after through.
+    bool m_permOnce = false;
     QString m_permToolId;
     QSet<QString> m_sessionAllow;
     QString m_thinkingMode;

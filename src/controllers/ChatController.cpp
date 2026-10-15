@@ -1,4 +1,5 @@
 #include "controllers/ChatController.h"
+#include "openai/ModelCaps.h"
 #include "Util.h"
 #include "artifacts/ArtifactExtractor.h"
 #include "artifacts/Attach.h"
@@ -542,6 +543,7 @@ void ChatController::beginSession(bool priv)
     m_forceFinalWrite = false;
     m_finalWriteAttempts = 0;
     m_sessionAllow.clear();
+    m_permOnce = false;
     m_permOpen = false;
     applyDefaultThinking();
     emit conversationChanged();
@@ -620,7 +622,9 @@ void ChatController::openConversation(const QString &id)
     // Restore this chat's exact backend+model pairing.
     const QString convBackend = c.backendId.isEmpty() ? m_settings->currentBackendId() : c.backendId;
     const QString convModel = c.model.isEmpty() ? m_settings->currentModel() : c.model;
-    m_settings->setCurrentBackendModel(convBackend, convModel);
+    // Unless that model has since been hidden: then the chat carries on with the one selected.
+    if (!m_settings->modelHidden(convBackend, convModel))
+        m_settings->setCurrentBackendModel(convBackend, convModel);
     m_thinkingMode = c.reasoningEffort;
     emit thinkingModeChanged();
     emit conversationChanged();
@@ -1475,6 +1479,7 @@ void ChatController::endGeneration()
     // Stop web requests still running for this generation instead of letting them
     // download for nobody. (Their callbacks fire, but the epoch above drops them.)
     m_web.cancelAll();
+    m_shell.cancelAll();
     m_toolRounds = 0;
     m_forceFinalWrite = false;
     m_finalWriteAttempts = 0;
@@ -1502,6 +1507,9 @@ QString ChatController::systemPrompt() const
         s += QString::fromUtf8(kArtifactInstructions);
     if (m_forceFinalWrite)
         s += QString::fromUtf8(kFinalWriteNudge);
+    // Skills are only of use to a model that can call load_skill.
+    if (m_settings->modelTools())
+        s += Skills::promptSection(m_skills, m_settings->shellEnabled());
     QString projectId = m_projects->currentProjectId();
     const QString genConv = m_genConvId.isEmpty() ? m_convId : m_genConvId;
     const bool genPriv = m_genConvId.isEmpty() ? m_private : m_genPrivate;
@@ -1625,7 +1633,9 @@ void ChatController::startGeneration()
                                                : m_store->backend(m_genBackendId);
     req.baseUrl = b.baseUrl;
     req.apiKey = b.apiKey;
+    req.ollamaNative = m_settings->backendIsOllama(b.id);
     req.model = m_genModel;
+    m_skills = Skills::discover(Skills::roots());
     req.messages = apiHistory();
     if (m_forceFinalWrite)
         req.tools = {};
@@ -1634,6 +1644,10 @@ void ChatController::startGeneration()
         req.tools = m_settings->modelTools() ? m_mcp->host()->openaiTools() : QJsonArray{};
         if (m_settings->modelTools())
             req.tools.append(WebSearch::fetchToolDefinition());
+        if (m_settings->modelTools() && m_settings->shellEnabled())
+            req.tools.append(ShellCommand::toolDefinition());
+        if (m_settings->modelTools() && !m_skills.isEmpty())
+            req.tools.append(Skills::toolDefinition());
         if (webSearchActive())
             req.tools.append(WebSearch::toolDefinition());
     }
@@ -2217,7 +2231,7 @@ void ChatController::onFailed(const QString &err)
     finishInterruptedReply();
     if (m_genAttached)
     {
-        setError(err);
+        setError(explainServerError(err, m_store->backend(m_genBackendId).name, m_genModel));
     }
     endGeneration();
 }
@@ -2388,13 +2402,78 @@ void ChatController::executeOneTool()
                     m_settings->webFetchOptions());
         return;
     }
+    if (name == QLatin1String("load_skill"))
+    {
+        m_toolFingerprints.insert(fp);
+        const QJsonObject args = QJsonDocument::fromJson(argsStr.toUtf8()).object();
+        const QString skill = args.value(QStringLiteral("name")).toString();
+        setToolActivity(QStringLiteral("Loading the %1 skill…").arg(skill.trimmed()));
+        // A skill is read into the context like an attached file, and sized the same way.
+        const qint64 room = FileImport::perFileLimitBytes(FileImport::budgetBytes(
+            m_settings->contextSizeFor(m_genBackendId, m_genModel)));
+        QString error;
+        const QString text = Skills::load(m_skills, skill, args.value(QStringLiteral("file")).toString(), room, &error);
+        finishToolMessage(id, name, error.isEmpty() ? text : error);
+        return;
+    }
+    if (name == QLatin1String("run_command"))
+    {
+        if (!m_settings->shellEnabled())
+        {
+            finishToolMessage(id, name,
+                              QStringLiteral("Running commands is turned off. The user can turn it on in Settings → Skills."));
+            return;
+        }
+        const QJsonObject args = QJsonDocument::fromJson(argsStr.toUtf8()).object();
+        const QString command = args.value(QStringLiteral("command")).toString();
+        const QString cwd = args.value(QStringLiteral("cwd")).toString();
+        if (command.trimmed().isEmpty())
+        {
+            finishToolMessage(id, name, QStringLiteral("No command given."));
+            return;
+        }
+        // Every command is shown to the user first, unless they allowed commands for this chat.
+        const QString key = QStringLiteral("shell/run_command");
+        const QString shown = cwd.trimmed().isEmpty() ? command : QStringLiteral("cd %1\n%2").arg(cwd.trimmed(), command);
+        if (!m_sessionAllow.contains(key) && !m_permOnce)
+        {
+            m_permOpen = true;
+            m_permKind = QStringLiteral("shell");
+            m_permTool = name;
+            m_permServer = ShellCommand::shellName();
+            m_permArgs = shown;
+            m_permToolId = id;
+            emit permissionChanged();
+            return;
+        }
+        m_permOnce = false;
+        m_toolFingerprints.insert(fp);
+        QString line = command.simplified();
+        if (line.size() > 72)
+        {
+            line.truncate(71);
+            line += QChar(0x2026);
+        }
+        setToolActivity(QStringLiteral("Running %1…").arg(line));
+        ShellCommand::Options opts;
+        opts.workingDirectory = cwd;
+        opts.maxOutputBytes = qMin<qint64>(ShellCommand::kDefaultMaxOutputBytes,
+                                           FileImport::perFileLimitBytes(FileImport::budgetBytes(
+                                               m_settings->contextSizeFor(m_genBackendId, m_genModel))));
+        m_shell.run(command, opts, [deliver, name](const QString &text, const QString &error)
+        {
+            deliver(name, error.isEmpty() ? text : error);
+        });
+        return;
+    }
     const McpTool tool = m_mcp->host()->findTool(name);
     const QString key = tool.server + QLatin1Char('/') + tool.name;
     const bool allowed = m_sessionAllow.contains(key) || m_store->isAlwaysAllowed(tool.server, tool.name)
-        || tool.name.isEmpty();
+        || tool.name.isEmpty() || m_permOnce;
     if (!allowed && !tool.name.isEmpty())
     {
         m_permOpen = true;
+        m_permKind = QStringLiteral("mcp");
         m_permTool = name;
         m_permServer = tool.server;
         m_permArgs = argsStr;
@@ -2402,6 +2481,7 @@ void ChatController::executeOneTool()
         emit permissionChanged();
         return;
     }
+    m_permOnce = false;
     if (tool.name.isEmpty())
     {
         finishToolMessage(id, {}, QStringLiteral("unknown tool"));
@@ -2442,8 +2522,11 @@ void ChatController::executeOneTool()
 
 void ChatController::resolvePermission(const QString &decision)
 {
-    const McpTool tool = m_mcp->host()->findTool(m_permTool);
-    const QString key = tool.server + QLatin1Char('/') + tool.name;
+    if (!m_permOpen)
+        return;
+    const bool shell = m_permKind == QLatin1String("shell");
+    const McpTool tool = shell ? McpTool{} : m_mcp->host()->findTool(m_permTool);
+    const QString key = shell ? QStringLiteral("shell/run_command") : tool.server + QLatin1Char('/') + tool.name;
     m_permOpen = false;
     emit permissionChanged();
     if (decision == QLatin1String("deny"))
@@ -2451,12 +2534,16 @@ void ChatController::resolvePermission(const QString &decision)
         finishToolMessage(m_permToolId, {}, QStringLiteral("User denied tool call"));
         return;
     }
-    if (decision == QLatin1String("chat") || decision == QLatin1String("once"))
+    // "Once" lets this one call through; it used to allow the tool for the rest of the chat.
+    m_permOnce = decision == QLatin1String("once");
+    if (decision == QLatin1String("chat"))
         m_sessionAllow.insert(key);
+    // A command line is never allowed for good: each new chat asks again.
     if (decision == QLatin1String("always"))
     {
         m_sessionAllow.insert(key);
-        m_store->allowAlways(tool.server, tool.name);
+        if (!shell)
+            m_store->allowAlways(tool.server, tool.name);
     }
     executeOneTool();
 }
@@ -2716,6 +2803,7 @@ void ChatController::startCompact(const QString &extra, bool automatic)
     const Backend b = m_settings->currentBackend();
     req.baseUrl = b.baseUrl;
     req.apiKey = b.apiKey;
+    req.ollamaNative = m_settings->backendIsOllama(b.id);
     req.model = m_settings->currentModel();
     req.messages = Compact::summaryRequest(Compact::transcript(m_pendingPlan.summarized), extra);
     req.temperature = 0.2;

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(shammy VERSION 0.13.0 LANGUAGES CXX)
+project(shammy VERSION 0.14.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,6 +27,8 @@ set(CORE_SOURCES
     src/openai/SseParser.cpp
     src/openai/SseParser.h
     src/openai/ToolCallXml.h
+    src/openai/OllamaNative.cpp
+    src/openai/OllamaNative.h
     src/openai/OpenAiClient.cpp
     src/openai/OpenAiClient.h
     src/openai/ChatTypes.h
@@ -65,6 +67,10 @@ set(CORE_SOURCES
     src/compact/Compactor.h
     src/import/ClaudeChatMerge.cpp
     src/import/ClaudeChatMerge.h
+    src/skills/Skills.cpp
+    src/skills/Skills.h
+    src/shell/ShellCommand.cpp
+    src/shell/ShellCommand.h
     src/websearch/WebSearch.cpp
     src/websearch/WebSearch.h
     src/Util.h

@@ -14,6 +14,7 @@ C++20, CMake, Qt 6.4+ Quick. MIT licensed.
 - Projects: instructions, file attachments, scoped chats
 - Artifacts: tagged blocks plus large HTML/SVG/JS fences, versioned side pane
 - Local MCP over stdio (Claude Desktop `mcpServers` schema), tool loop, permission prompts
+- Agent skills (`SKILL.md` folders) and shell commands, each command approved first
 - Markdown bubbles, code copy, regenerate / edit-resend, stop
 - Text and image attachments (vision as `image_url` data URLs), plus Word, spreadsheet and PDF files when the tools to read them are installed
 - Thinking/reasoning deltas when the backend streams them
@@ -87,8 +88,20 @@ a leftover `mcp.json`.
 Paste either `http://host:port` or `http://host:port/v1`. Empty API keys are
 sent as `ollama` (ignored by Ollama, often ignored by llama.cpp).
 
+A backend that answers Ollama's `/api/version` is sent chats on Ollama's own
+API (`/api/chat`), not its OpenAI-compatible one, which drops the context size.
+The per-model context size set in Settings → Models is then what Ollama loads
+the model with (up to what the model takes). Every other backend uses
+`/v1/chat/completions`.
+
 If the model list is empty, the backend is up but has nothing loaded — for
 Ollama, `ollama pull <model>`.
+
+Every model the backends list is offered in the model picker. To keep one out
+of it, turn on **Hide from selection** on that model in Settings → Models. A
+hidden model stays listed in Settings, where it can be shown again. Hiding the
+model in use switches to the first one still offered, and opening a chat that
+used a hidden model carries on with the selected model instead.
 
 ## Artifacts
 
@@ -185,6 +198,57 @@ with a search key set (Settings → General → Web search), `web_search`.
   and every hop gets the same checks. The check cannot stop a DNS server that
   answers differently the second time (DNS rebinding); it narrows that window
   but does not close it.
+
+## Skills and commands
+
+A skill is a folder holding a `SKILL.md`, in the same format other agent
+harnesses use. Skills live in `~/.config/shammy/skills/` on Linux
+(`$XDG_CONFIG_HOME/shammy/skills/` when that is set) and in
+`~/Library/Application Support/shammy/skills/` on macOS (lowercase, like the
+folder holding Shammy's data).
+A Mac also reads `~/.config/shammy/skills/` after that, and when both hold a
+skill of the same name the one in `Library` is used. Settings → Skills shows
+the main folder and opens it:
+
+```
+~/.config/shammy/skills/
+  sm-inventory/
+    SKILL.md          name and description up top, then the instructions
+    scripts/          anything else the instructions refer to
+  weather/
+    SKILL.md
+```
+
+The skills folder, or any skill in it, may be a symbolic link. To share one
+set of skills between Shammy and other harnesses that read `SKILL.md`, keep
+them in one place and link to it, for example
+`ln -s ~/skills ~/.config/shammy/skills`. A skill may not load files that
+lead outside its own folder, through a link or otherwise.
+
+```markdown
+---
+name: weather
+description: Look up the forecast for a city. Use when asked about the weather.
+---
+Run `curl -s "wttr.in/<city>?format=3"` and report the result.
+```
+
+- **What the model sees:** only each skill's name and description, in the
+  system prompt. When a request matches, it loads the instructions, or another
+  file from the skill's folder, with the `load_skill` tool. Folders are read
+  again for every reply, so a new or edited skill is picked up at once.
+- **Needs Tools:** skills are offered only to a model with Tools on.
+- **Running commands** (`run_command`) is off until turned on in
+  Settings → Skills. Every command is shown before it runs; allow it once or
+  for the rest of the chat. Nothing is allowed for good: each new chat asks
+  again. Commands run in your shell (`$SHELL` when it is bash, zsh, sh, dash
+  or ksh, else `/bin/sh`), in your home folder unless the model names another,
+  with nothing on standard input, so a command that prompts for input fails.
+  The model is told which system it is on, so it can write commands for the
+  BSD tools on macOS.
+- **Limits:** a command is stopped after 120 seconds, together with anything
+  it started; its output is kept to 32 KB (the start and the end), less for a
+  small context window. Stop ends a running command too.
 
 ## Contributing
 

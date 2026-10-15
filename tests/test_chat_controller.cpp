@@ -22,6 +22,10 @@
 #include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QtTest>
+
+#ifdef Q_OS_UNIX
+#include <signal.h>
+#endif
 #include <functional>
 #include <memory>
 
@@ -51,6 +55,8 @@ public:
         QString args = QStringLiteral("{}");
     };
     using Handler = std::function<Reply(int index, const QJsonObject &body)>;
+    // What GET /models lists.
+    QStringList modelIds{QStringLiteral("test-model")};
     // What Ollama's /api/ps says is loaded; empty for a server without one (404).
     QByteArray psReply;
     int psRequests = 0;
@@ -79,6 +85,9 @@ public:
 
     // Bodies of every chat/completions request, in arrival order.
     QList<QJsonObject> requests;
+    // Answer as Ollama: /api/version, and chats on /api/chat in its own stream format.
+    bool ollama = false;
+    QStringList paths; // the path of each chat request, in order
 
     void releaseHeld(const QString &t)
     {
@@ -143,8 +152,26 @@ private:
     {
         if (requestLine.startsWith("GET") && requestLine.contains("/models"))
         {
+            QJsonArray data;
+            for (const QString &id : modelIds)
+                data.append(QJsonObject{{QStringLiteral("id"), id}});
             send(s, QStringLiteral("application/json"),
-                 QStringLiteral("{\"object\":\"list\",\"data\":[{\"id\":\"test-model\"}]}").toUtf8());
+                 QJsonDocument(QJsonObject{{QStringLiteral("object"), QStringLiteral("list")}, {QStringLiteral("data"), data}})
+                     .toJson(QJsonDocument::Compact));
+            return;
+        }
+        if (ollama && requestLine.startsWith("GET") && requestLine.contains("/api/version"))
+        {
+            send(s, QStringLiteral("application/json"), "{\"version\":\"0.40.4\"}");
+            return;
+        }
+        if (ollama && requestLine.startsWith("POST") && requestLine.contains("/api/chat"))
+        {
+            const QJsonObject o = QJsonDocument::fromJson(body).object();
+            const int index = requests.size();
+            requests.append(o);
+            paths << QStringLiteral("/api/chat");
+            respondNative(s, o.value(QStringLiteral("stream")).toBool(true), m_handler(index, o));
             return;
         }
         if (requestLine.startsWith("GET") && requestLine.contains("/api/ps") && !psReply.isEmpty())
@@ -162,6 +189,7 @@ private:
         const QJsonObject o = QJsonDocument::fromJson(body).object();
         const int index = requests.size();
         requests.append(o);
+        paths << QStringLiteral("/v1/chat/completions");
         const Reply r = m_handler(index, o);
         const bool stream = o.value(QStringLiteral("stream")).toBool(true);
         if (r.kind == Hold)
@@ -171,8 +199,12 @@ private:
         }
         if (r.kind == Fail)
         {
-            const QByteArray body = "{\"error\":{\"message\":\"model exploded\"}}";
-            s->write("HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "
+            // r.text, when set, is the message of a 400 as Ollama words its refusals.
+            const QString message = r.text.isEmpty() ? QStringLiteral("model exploded") : r.text;
+            const QByteArray body = QJsonDocument(QJsonObject{{QStringLiteral("error"), QJsonObject{{QStringLiteral("message"), message}}}})
+                                        .toJson(QJsonDocument::Compact);
+            const QByteArray statusLine = r.text.isEmpty() ? "HTTP/1.1 500 Internal Server Error" : "HTTP/1.1 400 Bad Request";
+            s->write(statusLine + "\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "
                      + QByteArray::number(body.size()) + "\r\n\r\n" + body);
             s->flush();
             s->disconnectFromHost();
@@ -232,6 +264,63 @@ private:
                                             {QStringLiteral("finish_reason"), finish}}}}});
         out += "data: [DONE]\n\n";
         send(s, QStringLiteral("text/event-stream"), out, false);
+    }
+
+    // Ollama's own stream: one JSON object per line, tool calls whole, counts at the end.
+    void respondNative(QTcpSocket *s, bool stream, const Reply &r)
+    {
+        if (r.kind == Fail)
+        {
+            const QByteArray body = QJsonDocument(QJsonObject{{QStringLiteral("error"),
+                                                               r.text.isEmpty() ? QStringLiteral("model exploded") : r.text}})
+                                        .toJson(QJsonDocument::Compact);
+            s->write("HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "
+                     + QByteArray::number(body.size()) + "\r\n\r\n" + body);
+            s->flush();
+            s->disconnectFromHost();
+            return;
+        }
+        QJsonObject msg{{QStringLiteral("role"), QStringLiteral("assistant")}, {QStringLiteral("content"), QString()}};
+        if (r.kind == ToolCall)
+        {
+            const QJsonObject fn{{QStringLiteral("index"), 0},
+                                 {QStringLiteral("name"), r.tool},
+                                 {QStringLiteral("arguments"), QJsonDocument::fromJson(r.args.toUtf8()).object()}};
+            msg.insert(QStringLiteral("tool_calls"),
+                       QJsonArray{QJsonObject{{QStringLiteral("id"), QStringLiteral("call_n1")}, {QStringLiteral("function"), fn}}});
+        }
+        const QJsonObject last{{QStringLiteral("message"), QJsonObject{{QStringLiteral("role"), QStringLiteral("assistant")},
+                                                                         {QStringLiteral("content"), QString()}}},
+                               {QStringLiteral("done"), true},
+                               {QStringLiteral("done_reason"), QStringLiteral("stop")},
+                               {QStringLiteral("prompt_eval_count"), 120},
+                               {QStringLiteral("eval_count"), 7}};
+        if (!stream)
+        {
+            QJsonObject whole = last;
+            whole.insert(QStringLiteral("message"), QJsonObject{{QStringLiteral("role"), QStringLiteral("assistant")},
+                                                                {QStringLiteral("content"), r.text}});
+            send(s, QStringLiteral("application/json"), QJsonDocument(whole).toJson(QJsonDocument::Compact));
+            return;
+        }
+        QByteArray out;
+        if (r.kind == ToolCall)
+        {
+            out += QJsonDocument(QJsonObject{{QStringLiteral("message"), msg}, {QStringLiteral("done"), false}}).toJson(QJsonDocument::Compact) + "\n";
+        }
+        else
+        {
+            // The text in two pieces, as a real stream would send it.
+            const int half = r.text.size() / 2;
+            for (const QString &piece : {r.text.left(half), r.text.mid(half)})
+            {
+                QJsonObject m = msg;
+                m.insert(QStringLiteral("content"), piece);
+                out += QJsonDocument(QJsonObject{{QStringLiteral("message"), m}, {QStringLiteral("done"), false}}).toJson(QJsonDocument::Compact) + "\n";
+            }
+        }
+        out += QJsonDocument(last).toJson(QJsonDocument::Compact) + "\n";
+        send(s, QStringLiteral("application/x-ndjson"), out, false);
     }
 
     void send(QTcpSocket *s, const QString &type, const QByteArray &body, bool withLength = true)
@@ -395,6 +484,45 @@ QString systemText(const QJsonObject &request)
 {
     const QJsonArray msgs = request.value(QStringLiteral("messages")).toArray();
     return msgs.isEmpty() ? QString() : msgs.at(0).toObject().value(QStringLiteral("content")).toString();
+}
+
+// For the command and skill tests.
+struct ToolsOn
+{
+    SettingsController &s;
+    bool shell;
+    ToolsOn(SettingsController &settings, bool shellOn) : s(settings), shell(shellOn)
+    {
+        s.setModelTools(true);
+        s.setShellEnabled(shellOn);
+    }
+    ~ToolsOn()
+    {
+        s.setShellEnabled(false);
+        s.resetModelCapsFor(s.currentBackendId(), s.currentModel());
+    }
+};
+
+QStringList toolNames(const QJsonObject &request)
+{
+    QStringList out;
+    for (const QJsonValue &v : request.value(QStringLiteral("tools")).toArray())
+        out << v.toObject().value(QStringLiteral("function")).toObject().value(QStringLiteral("name")).toString();
+    return out;
+}
+QString lastToolText(Fixture &f)
+{
+    QString t;
+    for (const ChatMessage &m : f.chat->messages()->all())
+    {
+        if (m.role == QLatin1String("tool"))
+            t = m.content;
+    }
+    return t;
+}
+QString commandArgs(const QString &cmd)
+{
+    return QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("command"), cmd}}).toJson(QJsonDocument::Compact));
 }
 
 const auto numbered = [](int i, const QJsonObject &) { return FakeOpenAi::text(QStringLiteral("reply %1").arg(i + 1)); };
@@ -1344,6 +1472,403 @@ private slots:
         }
         QVERIFY2(toolText.contains(QLatin1String("exited")), qPrintable(toolText));
         QCOMPARE(f.chat->messages()->all().last().content, QStringLiteral("recovered"));
+    }
+
+    // -- Models hidden from the picker ---------------------------------------------
+
+    static QStringList pickerNames(SettingsController &s)
+    {
+        QStringList out;
+        QAbstractItemModel *m = s.pickerModels();
+        for (int i = 0; i < m->rowCount(); ++i)
+            out << m->index(i, 0).data(ModelListModel::NameRole).toString();
+        return out;
+    }
+
+    void hiddenModelsAreLeftOutOfThePicker()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        SettingsController &s = *f.settings;
+        const QString backend = s.currentBackendId();
+        f.ai.modelIds = {QStringLiteral("test-model"), QStringLiteral("other-model"), QStringLiteral("third-model")};
+        s.refreshModels();
+        QVERIFY(waitFor([&]() { return !s.loadingModels() && s.models()->rowCount() == 3; }));
+        QCOMPARE(pickerNames(s), (QStringList{QStringLiteral("test-model"), QStringLiteral("other-model"), QStringLiteral("third-model")}));
+        QCOMPARE(s.currentModel(), QStringLiteral("test-model"));
+
+        // Hidden: gone from the picker, still listed in Settings, and remembered.
+        s.setModelHidden(backend, QStringLiteral("other-model"), true);
+        QCOMPARE(pickerNames(s), (QStringList{QStringLiteral("test-model"), QStringLiteral("third-model")}));
+        QCOMPARE(s.models()->rowCount(), 3);
+        QVERIFY(s.models()->at(1).hidden);
+        QCOMPARE(s.currentModel(), QStringLiteral("test-model")); // not the one in use: nothing moves
+        {
+            SettingsController again(&f.store, &f.client);
+            QVERIFY(waitFor([&]() { return !again.loadingModels() && again.models()->rowCount() == 3; }));
+            QCOMPARE(pickerNames(again), (QStringList{QStringLiteral("test-model"), QStringLiteral("third-model")}));
+        }
+
+        // Picker rows map to the right models although one in between is missing.
+        s.selectPickerIndex(1);
+        QCOMPARE(s.currentModel(), QStringLiteral("third-model"));
+        QCOMPARE(s.currentPickerIndex(), 1);
+        QCOMPARE(s.currentModelIndex(), 2);
+
+        // Hiding the model in use moves to the first one the picker still offers.
+        s.setModelHidden(backend, QStringLiteral("test-model"), true);
+        QCOMPARE(s.currentModel(), QStringLiteral("third-model"));
+        s.setModelHidden(backend, QStringLiteral("third-model"), true);
+        QVERIFY(pickerNames(s).isEmpty());
+        QCOMPARE(s.currentModel(), QStringLiteral("third-model")); // nothing left to move to
+        QCOMPARE(s.currentPickerIndex(), -1);
+
+        // Shown again.
+        for (const QString &m : {QStringLiteral("test-model"), QStringLiteral("other-model"), QStringLiteral("third-model")})
+            s.setModelHidden(backend, m, false);
+        QCOMPARE(pickerNames(s).size(), 3);
+        QVERIFY(!s.modelHidden(backend, QStringLiteral("other-model")));
+        s.selectPickerIndex(0);
+    }
+
+    void aChatDoesNotSwitchToAHiddenModel()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        SettingsController &s = *f.settings;
+        const QString backend = s.currentBackendId();
+        f.ai.modelIds = {QStringLiteral("test-model"), QStringLiteral("other-model")};
+        s.refreshModels();
+        QVERIFY(waitFor([&]() { return !s.loadingModels() && s.models()->rowCount() == 2; }));
+
+        // A chat held with other-model.
+        s.selectPickerIndex(1);
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("hi")));
+        const QString chatId = f.chat->conversationId();
+        QVERIFY(!chatId.isEmpty());
+        s.selectPickerIndex(0);
+
+        // Opening it again switches to its model, as before...
+        f.chat->newChat();
+        f.chat->openConversation(chatId);
+        QCOMPARE(s.currentModel(), QStringLiteral("other-model"));
+
+        // ...but not once that model is hidden.
+        s.setModelHidden(backend, QStringLiteral("other-model"), true);
+        QCOMPARE(s.currentModel(), QStringLiteral("test-model"));
+        f.chat->newChat();
+        f.chat->openConversation(chatId);
+        QCOMPARE(s.currentModel(), QStringLiteral("test-model"));
+        QVERIFY(f.say(QStringLiteral("carry on")));
+        QCOMPARE(f.ai.requests.last().value(QStringLiteral("model")).toString(), QStringLiteral("test-model"));
+        s.setModelHidden(backend, QStringLiteral("other-model"), false);
+    }
+
+    void startupSettlesOnAModelThePickerOffers()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        const QString backend = f.settings->currentBackendId();
+        f.ai.modelIds = {QStringLiteral("test-model"), QStringLiteral("other-model")};
+        f.settings->setModelHidden(backend, QStringLiteral("test-model"), true);
+        QCOMPARE(f.settings->currentModel(), QStringLiteral("test-model")); // and that is what is saved
+        SettingsController again(&f.store, &f.client);
+        QVERIFY(waitFor([&]() { return !again.loadingModels() && again.currentModel() == QStringLiteral("other-model"); }));
+        again.setModelHidden(backend, QStringLiteral("test-model"), false);
+        again.selectPickerIndex(0);
+    }
+
+    // -- Ollama's refusals are explained ------------------------------------------
+
+    void aToolsRefusalSaysWhatToChange()
+    {
+        Fixture f([](int, const QJsonObject &)
+                  { return FakeOpenAi::Reply{FakeOpenAi::Fail, QStringLiteral("test-model does not support tools"), {}, {}}; });
+        QVERIFY(f.ok);
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("hi")));
+        const QString e = f.chat->errorBanner();
+        QVERIFY2(e.startsWith(QLatin1String("Fake turned the request down because the chat template it uses for test-model "
+                                            "has no tool support")),
+                 qPrintable(e));
+        QVERIFY(e.contains(QLatin1String("\n(Fake said: test-model does not support tools")));
+    }
+
+    // -- Ollama's own API ---------------------------------------------------------
+
+    void anOllamaBackendIsSentTheContextSize()
+    {
+        Fixture f([](int i, const QJsonObject &)
+                  {
+                      if (i == 0)
+                          return FakeOpenAi::toolCall(QStringLiteral("load_skill"), QStringLiteral("{\"name\":\"nope\"}"));
+                      return FakeOpenAi::text(QStringLiteral("all done here"));
+                  });
+        QVERIFY(f.ok);
+        f.ai.ollama = true;
+        SettingsController &s = *f.settings;
+        s.refreshModels(); // detection runs with the model list
+        QVERIFY(waitFor([&]() { return s.backendIsOllama(s.currentBackendId()); }));
+        s.setModelContextFromText(s.currentBackendId(), QStringLiteral("test-model"), QStringLiteral("64k"));
+        QSignalSpy usage(&f.client, &OpenAiClient::usage);
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("hello")));
+
+        QCOMPARE(f.ai.paths, (QStringList{QStringLiteral("/api/chat"), QStringLiteral("/api/chat")}));
+        const QJsonObject first = f.ai.requests.first();
+        QCOMPARE(first.value(QStringLiteral("options")).toObject().value(QStringLiteral("num_ctx")).toInt(), 65536);
+        QVERIFY(!first.contains(QStringLiteral("reasoning_effort"))); // an OpenAI field, not sent here
+        QCOMPARE(first.value(QStringLiteral("think")), QJsonValue(false));
+
+        // The tool call came back whole and ran; its result went back with the tool's name.
+        const QJsonArray second = f.ai.requests.at(1).value(QStringLiteral("messages")).toArray();
+        QJsonObject assistant, tool;
+        for (const QJsonValue &v : second)
+        {
+            const QJsonObject m = v.toObject();
+            if (m.value(QStringLiteral("role")).toString() == QLatin1String("assistant"))
+                assistant = m;
+            if (m.value(QStringLiteral("role")).toString() == QLatin1String("tool"))
+                tool = m;
+        }
+        const QJsonObject call = assistant.value(QStringLiteral("tool_calls")).toArray().at(0).toObject();
+        QCOMPARE(call.value(QStringLiteral("function")).toObject().value(QStringLiteral("name")).toString(), QStringLiteral("load_skill"));
+        QCOMPARE(call.value(QStringLiteral("function")).toObject().value(QStringLiteral("arguments")).toObject().value(QStringLiteral("name")).toString(),
+                 QStringLiteral("nope")); // an object, not a JSON string
+        QCOMPARE(tool.value(QStringLiteral("tool_name")).toString(), QStringLiteral("load_skill"));
+        QCOMPARE(tool.value(QStringLiteral("tool_call_id")).toString(), QStringLiteral("call_n1"));
+
+        // The streamed text, joined, and the token counts from the last line.
+        QCOMPARE(f.chat->messages()->all().last().content, QStringLiteral("all done here"));
+        QVERIFY(!usage.isEmpty());
+        QCOMPARE(usage.last(), (QList<QVariant>{120, 7, 127}));
+        s.setModelContextFromText(s.currentBackendId(), QStringLiteral("test-model"), QStringLiteral("256k"));
+    }
+
+    void anOllamaRefusalIsExplainedToo()
+    {
+        Fixture f([](int, const QJsonObject &)
+                  { return FakeOpenAi::Reply{FakeOpenAi::Fail, QStringLiteral("test-model does not support tools"), {}, {}}; });
+        QVERIFY(f.ok);
+        f.ai.ollama = true;
+        f.settings->refreshModels();
+        QVERIFY(waitFor([&]() { return f.settings->backendIsOllama(f.settings->currentBackendId()); }));
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("hi")));
+        QCOMPARE(f.ai.paths, QStringList{QStringLiteral("/api/chat")});
+        QVERIFY2(f.chat->errorBanner().contains(QLatin1String("has no tool support")), qPrintable(f.chat->errorBanner()));
+    }
+
+    void otherServersStayOnTheOpenAiRoute()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        f.settings->refreshModels();
+        QVERIFY(waitFor([&]() { return !f.settings->loadingModels(); }));
+        QTest::qWait(200); // the /api/version 404 has come back
+        QVERIFY(!f.settings->backendIsOllama(f.settings->currentBackendId()));
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("hi")));
+        QCOMPARE(f.ai.paths, QStringList{QStringLiteral("/v1/chat/completions")});
+    }
+
+    void compactionUsesOllamasApiToo()
+    {
+        Fixture f([](int, const QJsonObject &) { return FakeOpenAi::text(QStringLiteral("the summary")); });
+        QVERIFY(f.ok);
+        f.ai.ollama = true;
+        f.settings->refreshModels();
+        QVERIFY(waitFor([&]() { return f.settings->backendIsOllama(f.settings->currentBackendId()); }));
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("one")));
+        QVERIFY(f.say(QStringLiteral("two")));
+        QVERIFY(f.say(QStringLiteral("three")));
+        const int before = f.ai.requests.size();
+        f.chat->compact();
+        QVERIFY(waitFor([&]() { return !f.chat->compacting(); }));
+        QVERIFY(f.ai.requests.size() > before);
+        QCOMPARE(f.ai.paths.last(), QStringLiteral("/api/chat"));
+        QCOMPARE(f.ai.requests.last().value(QStringLiteral("stream")).toBool(true), false);
+        QVERIFY(f.ai.requests.last().value(QStringLiteral("options")).toObject().contains(QStringLiteral("num_ctx")));
+    }
+
+    // -- Commands and skills ------------------------------------------------------
+
+    void commandsAreOffUntilTurnedOn()
+    {
+        Fixture f([](int i, const QJsonObject &)
+                  {
+                      if (i == 0)
+                          return FakeOpenAi::toolCall(QStringLiteral("run_command"), commandArgs(QStringLiteral("echo hi")));
+                      return FakeOpenAi::text(QStringLiteral("done"));
+                  });
+        QVERIFY(f.ok);
+        ToolsOn on(*f.settings, false);
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("run something")));
+        QVERIFY(!toolNames(f.ai.requests.first()).contains(QStringLiteral("run_command")));
+        QVERIFY(toolNames(f.ai.requests.first()).contains(QStringLiteral("web_fetch")));
+        QVERIFY(!f.chat->permissionOpen()); // not even asked
+        QVERIFY2(lastToolText(f).contains(QLatin1String("Running commands is turned off")), qPrintable(lastToolText(f)));
+    }
+
+    void eachCommandIsApprovedFirst()
+    {
+        if (!QFile::exists(QStringLiteral("/bin/sh")))
+            QSKIP("needs a POSIX shell");
+        Fixture f([](int i, const QJsonObject &)
+                  {
+                      if (i == 0)
+                          return FakeOpenAi::toolCall(QStringLiteral("run_command"), commandArgs(QStringLiteral("echo one")));
+                      if (i == 1)
+                          return FakeOpenAi::toolCall(QStringLiteral("run_command"), commandArgs(QStringLiteral("echo two")));
+                      if (i == 2)
+                          return FakeOpenAi::toolCall(QStringLiteral("run_command"), commandArgs(QStringLiteral("echo three")));
+                      if (i == 3)
+                          return FakeOpenAi::toolCall(QStringLiteral("run_command"), commandArgs(QStringLiteral("echo four")));
+                      return FakeOpenAi::text(QStringLiteral("done"));
+                  });
+        QVERIFY(f.ok);
+        ToolsOn on(*f.settings, true);
+        f.chat->newChat();
+        f.chat->setComposerText(QStringLiteral("run things"));
+        f.chat->send();
+
+        // Asked, with the command shown; nothing has run yet.
+        QVERIFY(waitFor([&]() { return f.chat->permissionOpen(); }));
+        QVERIFY(toolNames(f.ai.requests.first()).contains(QStringLiteral("run_command")));
+        QCOMPARE(f.chat->permissionKind(), QStringLiteral("shell"));
+        QCOMPARE(f.chat->permissionArgs(), QStringLiteral("echo one"));
+        QVERIFY(!f.roles().contains(QStringLiteral("tool")));
+
+        // "Once" runs this one only: the next command asks again.
+        f.chat->resolvePermission(QStringLiteral("once"));
+        QVERIFY(waitFor([&]() { return f.chat->permissionOpen(); }));
+        QVERIFY2(lastToolText(f).contains(QLatin1String("one\n[exit code 0]")), qPrintable(lastToolText(f)));
+        QCOMPARE(f.chat->permissionArgs(), QStringLiteral("echo two"));
+
+        // Denied: not run, and the model is told.
+        f.chat->resolvePermission(QStringLiteral("deny"));
+        QVERIFY(waitFor([&]() { return f.chat->permissionOpen(); }));
+        QCOMPARE(lastToolText(f), QStringLiteral("User denied tool call"));
+        QCOMPARE(f.chat->permissionArgs(), QStringLiteral("echo three"));
+
+        // "This chat" covers the rest of the chat without asking.
+        f.chat->resolvePermission(QStringLiteral("chat"));
+        QVERIFY(waitFor([&]() { return !f.chat->streaming(); }));
+        QVERIFY(!f.chat->permissionOpen());
+        QStringList outputs;
+        for (const ChatMessage &m : f.chat->messages()->all())
+        {
+            if (m.role == QLatin1String("tool"))
+                outputs << m.content;
+        }
+        QCOMPARE(outputs.size(), 4);
+        QVERIFY(outputs.at(2).contains(QLatin1String("three\n[exit code 0]")));
+        QVERIFY(outputs.at(3).contains(QLatin1String("four\n[exit code 0]")));
+        QCOMPARE(f.chat->messages()->all().last().content, QStringLiteral("done"));
+
+        // A new chat asks again: commands are never allowed for good.
+        f.chat->newChat();
+        f.ai.requests.clear();
+        f.chat->setComposerText(QStringLiteral("again"));
+        f.chat->send(); // the fake starts over: "echo one" again
+        QVERIFY(waitFor([&]() { return f.chat->permissionOpen(); }));
+        QCOMPARE(f.chat->permissionArgs(), QStringLiteral("echo one"));
+        f.chat->stop();
+        QVERIFY(!f.chat->permissionOpen());
+    }
+
+    void stoppingKillsARunningCommand()
+    {
+        if (!QFile::exists(QStringLiteral("/bin/sh")))
+            QSKIP("needs a POSIX shell");
+        Fixture f([](int i, const QJsonObject &)
+                  {
+                      if (i == 0)
+                          return FakeOpenAi::toolCall(QStringLiteral("run_command"),
+                                                      commandArgs(QStringLiteral("echo $$ > \"$SHAMMY_TEST_PIDFILE\"; sleep 30")));
+                      return FakeOpenAi::text(QStringLiteral("late"));
+                  });
+        QVERIFY(f.ok);
+        QTemporaryDir dir;
+        const QString pidFile = dir.filePath(QStringLiteral("pid"));
+        qputenv("SHAMMY_TEST_PIDFILE", pidFile.toUtf8());
+        ToolsOn on(*f.settings, true);
+        f.chat->newChat();
+        f.chat->setComposerText(QStringLiteral("wait"));
+        f.chat->send();
+        QVERIFY(waitFor([&]() { return f.chat->permissionOpen(); }));
+        f.chat->resolvePermission(QStringLiteral("once"));
+        QVERIFY(waitFor([&]() { return QFileInfo(pidFile).size() > 0; }));
+        QFile pf(pidFile);
+        QVERIFY(pf.open(QIODevice::ReadOnly));
+        const pid_t pid = pf.readAll().trimmed().toInt();
+        QVERIFY(pid > 0);
+        QVERIFY(::kill(pid, 0) == 0); // running
+        QElapsedTimer t;
+        t.start();
+        f.chat->stop();
+        QVERIFY(waitFor([&]() { return !f.chat->streaming(); }, 3000));
+        QVERIFY(t.elapsed() < 3000);
+        QTest::qWait(200);
+        QCOMPARE(f.ai.requests.size(), 1); // no reply was asked for afterwards
+        QVERIFY(waitFor([&]() { return ::kill(pid, 0) != 0; }, 3000)); // and the command is gone
+        qunsetenv("SHAMMY_TEST_PIDFILE");
+    }
+
+    void skillsAreListedAndLoaded()
+    {
+        QTemporaryDir cfg;
+        QVERIFY(cfg.isValid());
+        QDir().mkpath(cfg.filePath(QStringLiteral("shammy/skills/greeter")));
+        QFile skill(cfg.filePath(QStringLiteral("shammy/skills/greeter/SKILL.md")));
+        QVERIFY(skill.open(QIODevice::WriteOnly));
+        skill.write("---\nname: greeter\ndescription: How to greet the user properly.\n---\nAlways say ahoy.\n");
+        skill.close();
+        const QByteArray oldXdg = qgetenv("XDG_CONFIG_HOME");
+        qputenv("XDG_CONFIG_HOME", cfg.path().toUtf8());
+        struct Restore
+        {
+            QByteArray v;
+            ~Restore()
+            {
+                if (v.isEmpty())
+                    qunsetenv("XDG_CONFIG_HOME");
+                else
+                    qputenv("XDG_CONFIG_HOME", v);
+            }
+        } restore{oldXdg};
+
+        Fixture f([](int i, const QJsonObject &)
+                  {
+                      if (i == 0)
+                          return FakeOpenAi::toolCall(QStringLiteral("load_skill"), QStringLiteral("{\"name\":\"greeter\"}"));
+                      return FakeOpenAi::text(QStringLiteral("ahoy"));
+                  });
+        QVERIFY(f.ok);
+        {
+            ToolsOn on(*f.settings, false);
+            f.chat->newChat();
+            QVERIFY(f.say(QStringLiteral("hello")));
+            const QString sys = systemText(f.ai.requests.first());
+            QVERIFY2(sys.contains(QLatin1String("- greeter: How to greet the user properly.")), qPrintable(sys.right(500)));
+            QVERIFY(!sys.contains(QLatin1String("Always say ahoy"))); // loaded only when asked for
+            QVERIFY(sys.contains(QLatin1String("Running commands is turned off")));
+            QVERIFY(toolNames(f.ai.requests.first()).contains(QStringLiteral("load_skill")));
+            QVERIFY2(lastToolText(f).contains(QLatin1String("Skill: greeter")), qPrintable(lastToolText(f)));
+            QVERIFY(lastToolText(f).contains(QLatin1String("Always say ahoy.")));
+            QVERIFY(!f.chat->permissionOpen()); // reading a skill needs no approval
+        }
+        // A model without Tools cannot load a skill, so none are listed.
+        f.settings->setModelTools(false);
+        f.ai.requests.clear();
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("hello again")));
+        QVERIFY(!systemText(f.ai.requests.first()).contains(QLatin1String("greeter")));
+        QVERIFY(!toolNames(f.ai.requests.first()).contains(QStringLiteral("load_skill")));
+        f.settings->resetModelCapsFor(f.settings->currentBackendId(), f.settings->currentModel());
     }
 
     // -- Project files are sized to the model's context window -------------------

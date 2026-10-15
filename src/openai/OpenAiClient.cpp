@@ -264,6 +264,28 @@ void OpenAiClient::probeLoadedContext(const QString &baseUrl, const QString &api
     });
 }
 
+void OpenAiClient::detectOllama(const QString &baseUrl, const QString &apiKey, const QString &backendId)
+{
+    if (baseUrl.trimmed().isEmpty())
+        return;
+    QNetworkRequest nreq(OllamaNative::versionUrl(baseUrl));
+    applyAuth(&nreq, apiKey, {});
+    nreq.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
+    nreq.setTransferTimeout(5000);
+    QNetworkReply *reply = m_nam.get(nreq);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, backendId]()
+    {
+        reply->deleteLater();
+        bool ollama = false;
+        if (reply->error() == QNetworkReply::NoError)
+        {
+            const QJsonObject o = QJsonDocument::fromJson(reply->readAll()).object();
+            ollama = o.value(QStringLiteral("version")).isString() && !o.contains(QStringLiteral("error"));
+        }
+        emit ollamaDetected(backendId, ollama);
+    });
+}
+
 void OpenAiClient::abort()
 {
     abortInternal(true);
@@ -288,10 +310,12 @@ void OpenAiClient::completeChat(const ChatRequest &req)
     ChatRequest oneShot = req;
     oneShot.stream = false;
     oneShot.tools = {};
-    QNetworkRequest nreq(chatCompletionsUrl(oneShot.baseUrl));
+    QNetworkRequest nreq(oneShot.ollamaNative ? OllamaNative::chatUrl(oneShot.baseUrl)
+                                              : chatCompletionsUrl(oneShot.baseUrl));
     applyAuth(&nreq, oneShot.apiKey, {});
     nreq.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
-    m_completeReply = m_nam.post(nreq, buildChatBody(oneShot));
+    m_completeReply = m_nam.post(nreq, oneShot.ollamaNative ? OllamaNative::buildChatBody(oneShot)
+                                                            : buildChatBody(oneShot));
     connect(m_completeReply, &QNetworkReply::finished, this, &OpenAiClient::onCompleteFinished);
 }
 
@@ -359,8 +383,7 @@ void OpenAiClient::onCompleteFinished()
     }
     if (reply->error() != QNetworkReply::NoError)
     {
-        emit completeFailed(reply->errorString()
-                            + (status ? QStringLiteral(" (HTTP %1)").arg(status) : QString()));
+        emit completeFailed(httpErrorMessage(reply, body, status));
         return;
     }
     const QString text = extractCompletionText(body);
@@ -485,17 +508,19 @@ void OpenAiClient::streamChat(const ChatRequest &req)
 {
     abortInternal(false);
     m_parser.reset();
+    m_ndjson.reset();
+    m_native = req.ollamaNative;
     m_gotDone = false;
     m_aborted = false;
     m_failed = false;
     m_gotEvent = false;
     m_finishReason.clear();
 
-    QNetworkRequest nreq(chatCompletionsUrl(req.baseUrl));
+    QNetworkRequest nreq(m_native ? OllamaNative::chatUrl(req.baseUrl) : chatCompletionsUrl(req.baseUrl));
     applyAuth(&nreq, req.apiKey, {});
     nreq.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
 
-    m_reply = m_nam.post(nreq, buildChatBody(req));
+    m_reply = m_nam.post(nreq, m_native ? OllamaNative::buildChatBody(req) : buildChatBody(req));
     connect(m_reply, &QNetworkReply::readyRead, this, &OpenAiClient::onStreamReadyRead);
     connect(m_reply, &QNetworkReply::finished, this, &OpenAiClient::onStreamFinished);
 }
@@ -506,7 +531,8 @@ void OpenAiClient::onStreamReadyRead()
     {
         return;
     }
-    dispatchEvents(m_parser.feed(m_reply->readAll()));
+    const QByteArray data = m_reply->readAll();
+    dispatchEvents(m_native ? m_ndjson.feed(data) : m_parser.feed(data));
 }
 
 void OpenAiClient::onStreamIdle()
@@ -515,7 +541,7 @@ void OpenAiClient::onStreamIdle()
     {
         return;
     }
-    dispatchEvents(m_parser.flush());
+    dispatchEvents(m_native ? m_ndjson.flush() : m_parser.flush());
     if (m_failed)
     {
         clearReply();
@@ -535,11 +561,11 @@ void OpenAiClient::onStreamFinished()
     const QByteArray rest = m_reply->readAll();
     if (!rest.isEmpty())
     {
-        dispatchEvents(m_parser.feed(rest + '\n'));
+        dispatchEvents(m_native ? m_ndjson.feed(rest + '\n') : m_parser.feed(rest + '\n'));
     }
     else
     {
-        dispatchEvents(m_parser.flush());
+        dispatchEvents(m_native ? m_ndjson.flush() : m_parser.flush());
     }
 
     QNetworkReply::NetworkError nerr = m_reply->error();
