@@ -189,6 +189,63 @@ private slots:
         QCOMPARE(err, QStringLiteral("There are no skills installed."));
     }
 
+#ifdef Q_OS_UNIX
+    void linkedSkillFolderIsFollowed()
+    {
+        // A skill folder that is a link to one kept elsewhere, such as a git checkout.
+        const QString elsewhere = m_dir.filePath(QStringLiteral("checkout/linked"));
+        QDir().mkpath(elsewhere + QStringLiteral("/scripts"));
+        QFile f(elsewhere + QStringLiteral("/SKILL.md"));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("---\nname: linked\ndescription: Kept in a checkout.\n---\nRun scripts/go.sh.\n");
+        f.close();
+        QFile g(elsewhere + QStringLiteral("/scripts/go.sh"));
+        QVERIFY(g.open(QIODevice::WriteOnly));
+        g.write("echo go\n");
+        g.close();
+        const QString link = root() + QStringLiteral("/linked");
+        QVERIFY(QFile::link(elsewhere, link));
+
+        const auto skills = Skills::discover(root());
+        const auto it = std::find_if(skills.begin(), skills.end(),
+                                     [](const Skills::Skill &s) { return s.name == QLatin1String("linked"); });
+        QVERIFY(it != skills.end());
+        QCOMPARE(it->description, QStringLiteral("Kept in a checkout."));
+        QString err;
+        const QString text = Skills::load(skills, QStringLiteral("linked"), {}, 65536, &err);
+        QVERIFY2(text.contains(QLatin1String("Run scripts/go.sh.")), qPrintable(err));
+        QVERIFY(text.contains(QLatin1String("scripts/go.sh")));
+        QVERIFY(Skills::load(skills, QStringLiteral("linked"), QStringLiteral("scripts/go.sh"), 65536, &err)
+                    .contains(QLatin1String("echo go")));
+        QFile::remove(link);
+    }
+
+    void linkedSkillsRootIsFollowed()
+    {
+        // The whole skills folder a link, e.g. ~/Library/Application Support/shammy/skills -> ~/skills.
+        const QString link = m_dir.filePath(QStringLiteral("app-support-skills"));
+        QVERIFY(QFile::link(root(), link));
+
+        const auto skills = Skills::discover(QStringList{link});
+        QStringList names;
+        for (const auto &s : skills)
+            names << s.name;
+        QCOMPARE(names, (QStringList{QStringLiteral("bare"), QStringLiteral("sm-inventory"), QStringLiteral("weather")}));
+        QString err;
+        const QString text = Skills::load(skills, QStringLiteral("sm-inventory"), {}, 65536, &err);
+        QVERIFY2(text.contains(QLatin1String("Run scripts/stock.sh.")), qPrintable(err));
+        QVERIFY(text.contains(QLatin1String("scripts/stock.sh")));
+        QVERIFY(Skills::load(skills, QStringLiteral("sm-inventory"), QStringLiteral("scripts/stock.sh"), 65536, &err)
+                    .contains(QLatin1String("echo stock")));
+        // Still no way out of a skill's folder through the linked root.
+        err.clear();
+        QCOMPARE(Skills::load(skills, QStringLiteral("sm-inventory"), QStringLiteral("../secret.txt"), 65536, &err),
+                 QString());
+        QVERIFY(err.startsWith(QLatin1String("No file")));
+        QFile::remove(link);
+    }
+#endif
+
     void loadIsCutToFit()
     {
         QVERIFY(write(QStringLiteral("big/SKILL.md"), "---\nname: big\ndescription: d\n---\n" + QByteArray(50000, 'x')));

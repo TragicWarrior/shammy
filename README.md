@@ -219,6 +219,12 @@ the main folder and opens it:
     SKILL.md
 ```
 
+The skills folder, or any skill in it, may be a symbolic link. To share one
+set of skills between Shammy and other harnesses that read `SKILL.md`, keep
+them in one place and link to it, for example
+`ln -s ~/skills ~/.config/shammy/skills`. A skill may not load files that
+lead outside its own folder, through a link or otherwise.
+
 ```markdown
 ---
 name: weather
