@@ -1,3 +1,19 @@
+shammy (0.14.0-1) unstable; urgency=medium
+
+  * Agent skills: SKILL.md folders under ~/.config/shammy/skills (macOS:
+    ~/Library/Application Support/shammy/skills, then ~/.config), loaded by
+    the model with the new load_skill tool; new Settings -> Skills page.
+  * Shell commands for the model (run_command), off by default; every command
+    is approved first, once or for the chat, and stopped after 120 s or Stop.
+  * Ollama backends are sent chats on Ollama's own /api/chat, so the context
+    size set per model is what Ollama loads the model with.
+  * Clearer message when Ollama refuses tools or thinking for a model.
+  * "Hide from selection" per model keeps it out of the model picker.
+  * Header model drop-down: long names fit, themed list, current model bold.
+  * "Once" in the MCP permission dialog now allows only that call.
+
+ -- Bryan Christ <bryan.christ@gmail.com>  Thu, 15 Oct 2026 17:12:33 -0500
+
 shammy (0.13.0-1) unstable; urgency=medium
 
   * Build and run on macOS (Apple silicon); the binary is now built into
