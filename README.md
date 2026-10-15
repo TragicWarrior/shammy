@@ -204,7 +204,8 @@ with a search key set (Settings → General → Web search), `web_search`.
 A skill is a folder holding a `SKILL.md`, in the same format other agent
 harnesses use. Skills live in `~/.config/shammy/skills/` on Linux
 (`$XDG_CONFIG_HOME/shammy/skills/` when that is set) and in
-`~/Library/Application Support/Shammy/skills/` on macOS, next to `config.json`.
+`~/Library/Application Support/shammy/skills/` on macOS (lowercase, like the
+folder holding Shammy's data).
 A Mac also reads `~/.config/shammy/skills/` after that, and when both hold a
 skill of the same name the one in `Library` is used. Settings → Skills shows
 the main folder and opens it:

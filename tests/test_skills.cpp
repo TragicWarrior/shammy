@@ -46,9 +46,9 @@ private slots:
         const QByteArray old = qgetenv("XDG_CONFIG_HOME");
         qputenv("XDG_CONFIG_HOME", "/tmp/xdg-test");
 #if defined(Q_OS_MACOS)
-        // A Mac keeps skills beside config.json first, and reads the XDG folder after it.
+        // A Mac keeps skills in its Application Support folder first, and reads the XDG folder after it.
         QCOMPARE(Skills::defaultRoot(),
-                 QDir::homePath() + QStringLiteral("/Library/Application Support/Shammy/skills"));
+                 QDir::homePath() + QStringLiteral("/Library/Application Support/shammy/skills"));
         QCOMPARE(Skills::roots(), (QStringList{Skills::defaultRoot(), QStringLiteral("/tmp/xdg-test/shammy/skills")}));
         qunsetenv("XDG_CONFIG_HOME");
         QCOMPARE(Skills::roots().value(1), QDir::homePath() + QStringLiteral("/.config/shammy/skills"));

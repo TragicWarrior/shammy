@@ -94,8 +94,9 @@ static QString xdgRoot()
 QString defaultRoot()
 {
 #if defined(Q_OS_MACOS)
-    // Next to config.json, where the rest of Shammy's own files live on a Mac.
-    return QDir::homePath() + QStringLiteral("/Library/Application Support/Shammy/skills");
+    // Lowercase, like the folder Qt makes for Shammy's data: a case-sensitive
+    // disk would not find "Shammy".
+    return QDir::homePath() + QStringLiteral("/Library/Application Support/shammy/skills");
 #else
     return xdgRoot();
 #endif

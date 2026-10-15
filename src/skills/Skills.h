@@ -6,7 +6,7 @@
 #include <QStringList>
 
 // Agent skills: folders under ~/.config/shammy/skills/ (on macOS,
-// ~/Library/Application Support/Shammy/skills/, then ~/.config/...), each
+// ~/Library/Application Support/shammy/skills/, then ~/.config/...), each
 // holding a SKILL.md whose front matter names and describes it:
 //
 //   ---
@@ -28,7 +28,7 @@ struct Skill
 };
 
 // $XDG_CONFIG_HOME/shammy/skills, else ~/.config/shammy/skills; on macOS,
-// ~/Library/Application Support/Shammy/skills.
+// ~/Library/Application Support/shammy/skills.
 QString defaultRoot();
 
 // The folders skills are read from, in order: defaultRoot(), then on macOS the
