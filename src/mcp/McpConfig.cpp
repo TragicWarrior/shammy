@@ -14,21 +14,26 @@ static QString currentDefaultPath()
     return QDir(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation))
         .filePath(QStringLiteral("Shammy/config.json"));
 #elif defined(Q_OS_MACOS)
-    return QDir::homePath() + QStringLiteral("/Library/Application Support/Shammy/config.json");
+    // Lowercase, like the folder Qt makes for Shammy's data: on a case-sensitive
+    // disk "Shammy" is a different folder.
+    return QDir::homePath() + QStringLiteral("/Library/Application Support/shammy/config.json");
 #else
     return QDir::homePath() + QStringLiteral("/.shammy/config.json");
 #endif
 }
 
-static QString legacyDefaultPath()
+// Where earlier versions kept the file, newest first.
+static QStringList legacyDefaultPaths()
 {
 #if defined(Q_OS_WIN)
-    return QDir(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation))
-        .filePath(QStringLiteral("LlamaChat/config.json"));
+    return {QDir(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation))
+                .filePath(QStringLiteral("LlamaChat/config.json"))};
 #elif defined(Q_OS_MACOS)
-    return QDir::homePath() + QStringLiteral("/Library/Application Support/LlamaChat/config.json");
+    // Shammy 0.14.0 and older used "Shammy", a separate folder on a case-sensitive disk.
+    return {QDir::homePath() + QStringLiteral("/Library/Application Support/Shammy/config.json"),
+            QDir::homePath() + QStringLiteral("/Library/Application Support/LlamaChat/config.json")};
 #else
-    return QDir::homePath() + QStringLiteral("/.llamachat/config.json");
+    return {QDir::homePath() + QStringLiteral("/.llamachat/config.json")};
 #endif
 }
 
@@ -37,11 +42,15 @@ QString McpConfig::defaultPath()
     const QString neu = currentDefaultPath();
     if (QFile::exists(neu))
         return neu;
-    const QString old = legacyDefaultPath();
-    if (QFile::exists(old))
+    // Copy the newest older file, so nothing is lost when the location moves.
+    for (const QString &old : legacyDefaultPaths())
     {
-        QDir().mkpath(QFileInfo(neu).absolutePath());
-        QFile::copy(old, neu);
+        if (QFile::exists(old))
+        {
+            QDir().mkpath(QFileInfo(neu).absolutePath());
+            QFile::copy(old, neu);
+            break;
+        }
     }
     return neu;
 }

@@ -60,7 +60,7 @@ Claude Desktop `mcpServers` schema:
 | OS | Path |
 |---|---|
 | Linux | `~/.shammy/config.json` |
-| macOS | `~/Library/Application Support/Shammy/config.json` |
+| macOS | `~/Library/Application Support/shammy/config.json` |
 | Windows | `%APPDATA%\Shammy\config.json` |
 
 On first launch, if that file is missing, Shammy imports `mcpServers` from
