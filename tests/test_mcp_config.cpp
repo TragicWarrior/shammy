@@ -26,6 +26,9 @@ private slots:
 #ifdef Q_OS_LINUX
         QVERIFY(p.contains(QStringLiteral("/.shammy/")));
 #endif
+#ifdef Q_OS_MACOS
+        QCOMPARE(p, QDir::homePath() + QStringLiteral("/Library/Application Support/shammy/config.json"));
+#endif
     }
 
     void parseClaudeShape()
