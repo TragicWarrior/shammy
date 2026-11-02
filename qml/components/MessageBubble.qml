@@ -299,6 +299,7 @@ Item {
                 spacing: 6
 
                 Image {
+                    id: chatImage
                     width: Math.min(parent.width, 640)
                     height: root.generatedImage.width > 0
                             ? Math.round(width * root.generatedImage.height / root.generatedImage.width)
@@ -308,6 +309,28 @@ Item {
                     asynchronous: true
                     sourceSize.width: 1280
                     anchors.horizontalCenter: parent.horizontalCenter
+
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            viewerLoader.active = true
+                            viewerLoader.item.open()
+                        }
+                    }
+                }
+                Loader {
+                    id: viewerLoader
+                    active: false
+                    sourceComponent: Component {
+                        ImageViewer {
+                            path: root.generatedImage.path
+                            source: root.generatedImage.url
+                            prompt: root.generatedImage.prompt
+                            imageWidth: root.generatedImage.width
+                            imageHeight: root.generatedImage.height
+                        }
+                    }
                 }
 
                 Text {

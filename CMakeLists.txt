@@ -130,6 +130,7 @@ set(QML_FILES
     qml/components/MenuIcon.qml
     qml/components/ProjectsOverview.qml
     qml/components/ProjectWorkspace.qml
+    qml/components/ImageViewer.qml
 )
 if(HAVE_WEBENGINE)
     list(APPEND QML_FILES qml/components/ArtifactWebPreview.qml)

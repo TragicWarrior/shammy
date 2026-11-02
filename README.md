@@ -225,6 +225,11 @@ never sees the image.
 The generated image appears in the chat with its prompt as a caption, and
 "Save as…" / "Copy" actions. **Stop** sends a cancel request to the server.
 
+Click the image to open it in its own window. Moving the mouse shows a control
+bar at the top that fades out once the mouse rests: zoom out and in (`-`, `+`,
+the mouse wheel; drag to pan), Fit (`0`), Copy (`Ctrl+C`) and Full screen
+(`f`). `Esc` leaves full screen, then closes the window.
+
 ## Skills and commands
 
 A skill is a folder holding a `SKILL.md`, in the same format other agent
