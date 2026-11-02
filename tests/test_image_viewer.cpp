@@ -14,8 +14,13 @@
 // functions or writing its properties. QTEST_MAIN (not the GUI-less main) so the
 // offscreen platform can create the window.
 
-// The offscreen platform cannot raise windows; that warning is expected.
-static const char *kOffscreenRaise = "does not support raise()";
+// Warnings that come from the test machine, not the viewer: the offscreen
+// platform cannot raise windows, and macOS reports slow font-alias lookups
+// ("Populating font family aliases took ... ms").
+static const char *kExpectedWarnings[] = {
+    "does not support raise()",
+    "Populating font family aliases",
+};
 
 // Warnings seen while a test runs.
 static QStringList s_warnings;
@@ -94,13 +99,22 @@ struct Viewer
         return QTest::qWaitForWindowExposed(window);
     }
 
-    // Warnings other than the expected offscreen one.
+    // Warnings other than the expected ones.
     QStringList unexpectedWarnings() const
     {
         QStringList out;
         for (const QString &w : std::as_const(s_warnings))
         {
-            if (!w.contains(QLatin1String(kOffscreenRaise)))
+            // Keep the warning unless it is one of the expected ones.
+            bool expected = false;
+            for (const char *e : kExpectedWarnings)
+            {
+                if (w.contains(QLatin1String(e)))
+                {
+                    expected = true;
+                }
+            }
+            if (!expected)
             {
                 out << w;
             }
