@@ -11,6 +11,7 @@
 #include "persist/Store.h"
 #include "artifacts/FileImport.h"
 #include "compact/Compactor.h"
+#include "imagegen/ImageGen.h"
 #include "shell/ShellCommand.h"
 #include "skills/Skills.h"
 #include "websearch/WebSearch.h"
@@ -173,6 +174,12 @@ public:
     Q_INVOKABLE void saveCurrentArtifact(const QString &destPath);
     Q_INVOKABLE void exportCurrentArtifactToWord(const QString &destPath);
     Q_INVOKABLE QUrl suggestedWordExportUrl() const;
+    // Look up the image files for a tool message and return the PNG path, URL and metadata.
+    Q_INVOKABLE QVariantMap imageForMessage(const QString &toolContent) const;
+    // Copy the PNG file at `path` to `dest` (overwrite if it exists); false on failure.
+    Q_INVOKABLE bool saveImageAs(const QString &path, const QUrl &dest);
+    // Load the PNG at `path` into the system clipboard as an image; false on failure.
+    Q_INVOKABLE bool copyImageToClipboard(const QString &path);
     Q_INVOKABLE void reloadHistory();
     // How long typing in the search box must pause before the search runs.
     static constexpr int kSearchDelayMs = 180;
@@ -308,6 +315,7 @@ private:
     ProjectController *m_projects = nullptr;
     SettingsController *m_settings = nullptr;
     WebSearch m_web;
+    ImageGen m_imageGen;
     ShellCommand m_shell;
     // Read again for every reply, so that a skill added or edited is seen at once.
     QList<Skills::Skill> m_skills;
@@ -342,6 +350,11 @@ private:
     QString m_genThinking;
     QVector<ChatMessage> m_genMessages;
     bool m_webSearch = true;
+    // Connections to the current image generation job so later jobs
+    // cannot reach an old lambda.
+    QMetaObject::Connection m_imageGenProgressConn;
+    QMetaObject::Connection m_imageGenFinishedConn;
+    QMetaObject::Connection m_imageGenFailedConn;
     QString m_toolActivity;
     bool m_artifactPaneOpen = false;
     bool m_wordExportBusy = false;
@@ -356,6 +369,9 @@ private:
     int m_toolRounds = 0;
     bool m_forceFinalWrite = false;
     int m_finalWriteAttempts = 0;
+    // Set when an image has been shown in this generation to prevent
+    // the final-write re-prompt from confusing the model after a caption.
+    bool m_imageShown = false;
 
     QMap<int, AccTool> m_accTools;
     QSet<QString> m_toolFingerprints;

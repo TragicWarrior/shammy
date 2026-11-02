@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 
 Item {
@@ -24,11 +25,15 @@ Item {
     readonly property bool waitingOnTools: !isUser && !isTool && !isCompact
         && !streaming && chat.streaming && chat.toolActivity.length > 0
         && toolCalls.length > 0
+    readonly property var generatedImage: isTool && content.length > 0 ? chat.imageForMessage(content) : ({})
+    readonly property bool hasImage: generatedImage.path !== undefined
     readonly property string waitCaption: {
         if (root.fetchingPage || (root.waitingOnTools && toolCalls.indexOf("web_fetch") !== -1))
             return "Fetching page…"
         if (root.searchingWeb || (root.waitingOnTools && toolCalls.indexOf("web_search") !== -1))
             return "Searching web…"
+        if (root.waitingOnTools && toolCalls.indexOf("generate_image") !== -1)
+            return chat.toolActivity.length > 0 ? chat.toolActivity : "Drawing…"
         if (root.waitingOnTools)
             return "Using tools…"
         if (root.writingHtml)
@@ -285,6 +290,108 @@ Item {
                     property var part: modelData
                     property bool showOpen: true
                     sourceComponent: artComp
+                }
+            }
+
+            Column {
+                visible: root.isTool && root.hasImage
+                width: parent.width
+                spacing: 6
+
+                Image {
+                    id: chatImage
+                    width: Math.min(parent.width, 640)
+                    height: root.generatedImage.width > 0
+                            ? Math.round(width * root.generatedImage.height / root.generatedImage.width)
+                            : 0
+                    source: root.generatedImage.url
+                    fillMode: Image.PreserveAspectFit
+                    asynchronous: true
+                    sourceSize.width: 1280
+                    anchors.horizontalCenter: parent.horizontalCenter
+
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            viewerLoader.active = true
+                            viewerLoader.item.open()
+                        }
+                    }
+                }
+                Loader {
+                    id: viewerLoader
+                    active: false
+                    sourceComponent: Component {
+                        ImageViewer {
+                            path: root.generatedImage.path
+                            source: root.generatedImage.url
+                            prompt: root.generatedImage.prompt
+                            imageWidth: root.generatedImage.width
+                            imageHeight: root.generatedImage.height
+                        }
+                    }
+                }
+
+                Text {
+                    width: parent.width
+                    text: root.generatedImage.prompt
+                    color: Theme.muted
+                    font.pixelSize: 12
+                    wrapMode: Text.Wrap
+                }
+
+                Row {
+                    spacing: 16
+                    Text {
+                        text: "Save as…"
+                        color: Theme.muted
+                        font.pixelSize: 12
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: saveAsDialog.open()
+                        }
+                    }
+                    Text {
+                        text: "Copy"
+                        color: Theme.muted
+                        font.pixelSize: 12
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                const ok = chat.copyImageToClipboard(root.generatedImage.path)
+                                statusText.text = ok ? "Copied" : "Could not copy"
+                                statusText.visible = true
+                                statusTimer.start()
+                            }
+                        }
+                    }
+                    Text {
+                        id: statusText
+                        visible: false
+                        color: Theme.muted
+                        font.pixelSize: 12
+                    }
+                    Timer {
+                        id: statusTimer
+                        interval: 2000
+                        onTriggered: statusText.visible = false
+                    }
+                }
+
+                FileDialog {
+                    id: saveAsDialog
+                    fileMode: FileDialog.SaveFile
+                    defaultSuffix: "png"
+                    nameFilters: ["PNG image (*.png)"]
+                    onAccepted: {
+                        const ok = chat.saveImageAs(root.generatedImage.path, selectedFile)
+                        statusText.text = ok ? "Saved" : "Could not save"
+                        statusText.visible = true
+                        statusTimer.start()
+                    }
                 }
             }
 

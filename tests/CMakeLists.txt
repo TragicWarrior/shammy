@@ -27,6 +27,15 @@ shammy_test(test_claude_import)
 shammy_test(test_skills)
 shammy_test(test_shell_command)
 shammy_test(test_ollama_native)
+shammy_test(test_image_gen)
+add_executable(test_image_viewer test_image_viewer.cpp)
+target_link_libraries(test_image_viewer PRIVATE shammy_core Qt6::Test Qt6::Network Qt6::Sql Qt6::Quick)
+target_include_directories(test_image_viewer PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_image_viewer PRIVATE
+    QML_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+add_test(NAME test_image_viewer COMMAND test_image_viewer)
+# Opens real windows: keep them off the user's display.
+set_tests_properties(test_image_viewer PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Controller-level tests: the controllers and list models live in the app target
 # (next to the QML module), so build the few they need directly into each test.

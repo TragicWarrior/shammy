@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(shammy VERSION 0.14.0 LANGUAGES CXX)
+project(shammy VERSION 0.15.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -73,6 +73,8 @@ set(CORE_SOURCES
     src/shell/ShellCommand.h
     src/websearch/WebSearch.cpp
     src/websearch/WebSearch.h
+    src/imagegen/ImageGen.cpp
+    src/imagegen/ImageGen.h
     src/Util.h
 )
 
@@ -128,6 +130,7 @@ set(QML_FILES
     qml/components/MenuIcon.qml
     qml/components/ProjectsOverview.qml
     qml/components/ProjectWorkspace.qml
+    qml/components/ImageViewer.qml
 )
 if(HAVE_WEBENGINE)
     list(APPEND QML_FILES qml/components/ArtifactWebPreview.qml)

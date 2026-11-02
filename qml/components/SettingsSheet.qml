@@ -44,6 +44,8 @@ Popup {
         property string webSearchApiKey: ""
         property int webFetchTimeoutSeconds: 300
         property int webFetchStallSeconds: 30
+        property string imageGenUrl: ""
+        property string imageGenToken: ""
     }
 
     function loadDraft() {
@@ -72,6 +74,8 @@ Popup {
         draft.webSearchApiKey = settings.webSearchApiKey
         draft.webFetchTimeoutSeconds = settings.webFetchTimeoutSeconds
         draft.webFetchStallSeconds = settings.webFetchStallSeconds
+        draft.imageGenUrl = settings.imageGenUrl
+        draft.imageGenToken = settings.imageGenToken
         draftBackends.clear()
         const backends = settings.backendSnapshot()
         for (let i = 0; i < backends.length; ++i)
@@ -103,6 +107,8 @@ Popup {
         settings.webSearchApiKey = draft.webSearchApiKey
         settings.webFetchTimeoutSeconds = draft.webFetchTimeoutSeconds
         settings.webFetchStallSeconds = draft.webFetchStallSeconds
+        settings.imageGenUrl = draft.imageGenUrl
+        settings.imageGenToken = draft.imageGenToken
         const backends = []
         for (let i = 0; i < draftBackends.count; ++i) {
             const r = draftBackends.get(i)
@@ -536,6 +542,90 @@ Popup {
                             Layout.fillWidth: true
                             Layout.leftMargin: 24
                             Layout.rightMargin: 24
+                        }
+
+                        Item { Layout.preferredHeight: 20 }
+
+                        Rectangle { Layout.fillWidth: true; Layout.leftMargin: 24; Layout.rightMargin: 24; height: 1; color: Theme.hairline }
+
+                        Text {
+                            text: "Image generation"
+                            color: Theme.text
+                            font.pixelSize: 15
+                            font.weight: Font.DemiBold
+                            Layout.leftMargin: 24
+                        }
+                        Text {
+                            text: "A separate image server renders images on command from the model. Empty URL disables the feature."
+                            color: Theme.muted
+                            wrapMode: Text.Wrap
+                            font.pixelSize: 12
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 24
+                            Layout.rightMargin: 24
+                        }
+                        Text {
+                            text: "Server URL"
+                            color: Theme.muted
+                            font.pixelSize: 12
+                            Layout.leftMargin: 24
+                        }
+                        TextField {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 24
+                            Layout.rightMargin: 24
+                            text: draft.imageGenUrl
+                            placeholderText: "http://host:port"
+                            color: Theme.text
+                            onTextChanged: draft.imageGenUrl = text
+                            background: Rectangle { color: Theme.panel; radius: 8; border.color: Theme.border }
+                        }
+                        Text {
+                            text: "Token"
+                            color: Theme.muted
+                            font.pixelSize: 12
+                            Layout.leftMargin: 24
+                        }
+                        TextField {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 24
+                            Layout.rightMargin: 24
+                            echoMode: TextInput.Password
+                            text: draft.imageGenToken
+                            placeholderText: "Bearer token"
+                            color: Theme.text
+                            onTextChanged: draft.imageGenToken = text
+                            background: Rectangle { color: Theme.panel; radius: 8; border.color: Theme.border }
+                        }
+                        Button {
+                            Layout.leftMargin: 24
+                            text: "Test connection"
+                             enabled: draft.imageGenUrl.trim().length > 0
+                             onClicked: {
+                                 settings.testImageConnection(draft.imageGenUrl)
+                             }
+                        }
+                        Text {
+                            id: imageGenTestLine
+                            text: ""
+                            color: Theme.muted
+                            wrapMode: Text.Wrap
+                            font.pixelSize: 12
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 24
+                            Layout.rightMargin: 24
+                        }
+                        Connections {
+                            target: settings
+                            function onImageGenTestResult(ok, message) {
+                                if (ok) {
+                                    imageGenTestLine.text = "Connected: " + message
+                                    imageGenTestLine.color = Theme.text
+                                } else {
+                                    imageGenTestLine.text = "Connection failed: " + message
+                                    imageGenTestLine.color = Theme.danger
+                                }
+                            }
                         }
 
                         Item { Layout.preferredHeight: 20 }

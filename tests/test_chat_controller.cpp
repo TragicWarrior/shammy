@@ -2,6 +2,7 @@
 #include "Util.h"
 #include "artifacts/PdfExtract.h"
 #include "controllers/ChatController.h"
+#include "imagegen/ImageGen.h"
 #include "controllers/McpController.h"
 #include "controllers/ProjectController.h"
 #include "controllers/SettingsController.h"
@@ -560,6 +561,161 @@ struct ToolReset
         s.setModelContextFromText(s.currentBackendId(), QStringLiteral("test-model"), QStringLiteral("16k"));
     }
 };
+
+// Minimal fake zimage-gw HTTP server for image generation tests.
+class FakeImageServer : public QObject
+{
+public:
+    struct Route
+    {
+        int status = 200;
+        QByteArray body;
+        QByteArray contentType = "application/json";
+    };
+
+    FakeImageServer() { connect(&m_server, &QTcpServer::newConnection, this, [this]() { accept(); }); }
+
+    bool listen() { return m_server.listen(QHostAddress::LocalHost, 0); }
+    quint16 port() const { return m_server.serverPort(); }
+    QString url(const QString &path) const
+    {
+        return QStringLiteral("http://127.0.0.1:%1%2").arg(port()).arg(path);
+    }
+
+    QHash<QString, Route> routes;
+    QHash<QString, int> hits;
+    QHash<QString, QList<QByteArray>> pollResponses;
+    QByteArray imageBytes;
+    int deleteHits = 0;
+
+    // Captured POST body for the submit endpoint.
+    QByteArray lastSubmitBody;
+
+private:
+    void accept()
+    {
+        while (QTcpSocket *s = m_server.nextPendingConnection())
+        {
+            s->setParent(this);
+            connect(s, &QTcpSocket::readyRead, this, [this, s]() { onData(s); });
+            connect(s, &QTcpSocket::disconnected, s, &QObject::deleteLater);
+        }
+    }
+
+    void onData(QTcpSocket *s)
+    {
+        QByteArray &buf = m_buf[s];
+        buf += s->readAll();
+        const int end = buf.indexOf("\r\n\r\n");
+        if (end < 0)
+            return;
+        const QList<QByteArray> parts = buf.left(buf.indexOf("\r\n")).split(' ');
+        // Capture the POST body for the submit endpoint before consuming.
+        if (parts.size() >= 2 && parts[0] == "POST" &&
+            parts[1] == "/v1/images/generations")
+        {
+            lastSubmitBody = buf.mid(end + 4);
+        }
+        m_buf.remove(s);
+        if (parts.size() >= 2)
+            serve(s, QString::fromLatin1(parts.at(0)), QString::fromLatin1(parts.at(1)));
+    }
+
+    void serve(QTcpSocket *s, const QString &method, const QString &path)
+    {
+        if (method == "DELETE")
+        {
+            // Only count DELETE to /v1/jobs/<job_id> with a valid id.
+            if (path.startsWith(QStringLiteral("/v1/jobs/")))
+            {
+                ++deleteHits;
+                const QByteArray body =
+                    "{\"id\":\"\",\"status\":\"cancelled\",\"object\":\"zimage.job\"}";
+                const QByteArray head =
+                    "HTTP/1.1 200 OK\r\n"
+                    "Content-Type: application/json\r\n"
+                    "Content-Length: " +
+                    QByteArray::number(body.size()) + "\r\n"
+                                                       "\r\n";
+                s->write(head);
+                s->write(body);
+                s->disconnectFromHost();
+                return;
+            }
+        }
+        ++hits[path];
+        Route r;
+        if (routes.contains(path))
+            r = routes.value(path);
+
+        if (path.endsWith("/image") && !imageBytes.isEmpty() && r.body.isEmpty())
+        {
+            const QByteArray head = "HTTP/1.1 200 OK\r\n"
+                                    "Content-Type: image/png\r\n"
+                                    "Content-Length: " +
+                                    QByteArray::number(imageBytes.size()) + "\r\n"
+                                    "Connection: close\r\n\r\n";
+            s->write(head);
+            s->write(imageBytes);
+            s->disconnectFromHost();
+            return;
+        }
+
+        if (pollResponses.contains(path) && r.body.isEmpty())
+        {
+            int idx = hits[path] - 1;
+            if (idx >= 0 && idx < pollResponses[path].size())
+                r.body = pollResponses[path][idx];
+        }
+
+        const bool small = !r.body.isEmpty();
+        QByteArray head = "HTTP/1.1 " + QByteArray::number(r.status) + " OK\r\n"
+                          "Connection: close\r\n";
+        if (!r.contentType.isEmpty())
+            head += "Content-Type: " + r.contentType + "\r\n";
+        if (small)
+            head += "Content-Length: " + QByteArray::number(r.body.size()) + "\r\n";
+        head += "\r\n";
+        s->write(head);
+        if (small)
+            s->write(r.body);
+        s->flush();
+        s->disconnectFromHost();
+    }
+
+    QTcpServer m_server;
+    QHash<QTcpSocket *, QByteArray> m_buf;
+};
+
+// Simple 1x1 red PNG (89 bytes).
+QByteArray makeOnePixelPng()
+{
+    static const uchar data[] = {
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00,
+        0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
+        0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x18, 0xDD, 0x8D, 0x4B, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    };
+    return QByteArray(reinterpret_cast<const char *>(data), sizeof(data));
+}
+
+// Helper: build generate_image tool call JSON string.
+QString genImageArgs(const QString &prompt, const QString &subject = QStringLiteral("scene"),
+                     const QString &aspect = QStringLiteral("square"),
+                     const QString &quality = QStringLiteral("normal"),
+                     qint64 seed = -1)
+{
+    QJsonObject a;
+    a.insert(QStringLiteral("prompt"), prompt);
+    a.insert(QStringLiteral("subject"), subject);
+    a.insert(QStringLiteral("aspect"), aspect);
+    a.insert(QStringLiteral("quality"), quality);
+    if (seed >= 0)
+        a.insert(QStringLiteral("seed"), seed);
+    return QJsonDocument(a).toJson(QJsonDocument::Compact);
+}
 } // namespace
 
 class TestChatController : public QObject
@@ -1871,6 +2027,106 @@ private slots:
         f.settings->resetModelCapsFor(f.settings->currentBackendId(), f.settings->currentModel());
     }
 
+    // -- Image generation tool ----------------------------------------------------
+
+    void imageGenToolIsOfferedWhenReady()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        SettingsController &s = *f.settings;
+        struct Reset
+        {
+            SettingsController &s;
+            ~Reset()
+            {
+                s.setImageGenUrl({});
+                s.setImageGenToken({});
+                s.setModelTools(true);
+                s.resetModelCapsFor(s.currentBackendId(), s.currentModel());
+            }
+        } reset{s};
+
+        ToolsOn on(*f.settings, false);
+        s.setImageGenUrl(QStringLiteral("http://10.100.0.2:8189"));
+        s.setImageGenToken(QStringLiteral("secret"));
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("hello")));
+        QVERIFY(toolNames(f.ai.requests.first()).contains(QStringLiteral("generate_image")));
+    }
+
+    void imageGenToolNotOfferedWithEmptyUrl()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        SettingsController &s = *f.settings;
+        struct Reset
+        {
+            SettingsController &s;
+            ~Reset()
+            {
+                s.setImageGenUrl({});
+                s.setImageGenToken({});
+                s.setModelTools(true);
+                s.resetModelCapsFor(s.currentBackendId(), s.currentModel());
+            }
+        } reset{s};
+
+        ToolsOn on(*f.settings, false);
+        s.setImageGenToken(QStringLiteral("secret"));
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("hello")));
+        QVERIFY(!toolNames(f.ai.requests.first()).contains(QStringLiteral("generate_image")));
+    }
+
+    void imageGenToolNotOfferedWithEmptyToken()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        SettingsController &s = *f.settings;
+        struct Reset
+        {
+            SettingsController &s;
+            ~Reset()
+            {
+                s.setImageGenUrl({});
+                s.setImageGenToken({});
+                s.setModelTools(true);
+                s.resetModelCapsFor(s.currentBackendId(), s.currentModel());
+            }
+        } reset{s};
+
+        ToolsOn on(*f.settings, false);
+        s.setImageGenUrl(QStringLiteral("http://10.100.0.2:8189"));
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("hello")));
+        QVERIFY(!toolNames(f.ai.requests.first()).contains(QStringLiteral("generate_image")));
+    }
+
+    void imageGenToolNotOfferedWhenToolsOff()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        SettingsController &s = *f.settings;
+        struct Reset
+        {
+            SettingsController &s;
+            ~Reset()
+            {
+                s.setImageGenUrl({});
+                s.setImageGenToken({});
+                s.setModelTools(true);
+                s.resetModelCapsFor(s.currentBackendId(), s.currentModel());
+            }
+        } reset{s};
+
+        s.setImageGenUrl(QStringLiteral("http://10.100.0.2:8189"));
+        s.setImageGenToken(QStringLiteral("secret"));
+        s.setModelTools(false);
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("hello")));
+        QVERIFY(!toolNames(f.ai.requests.first()).contains(QStringLiteral("generate_image")));
+    }
+
     // -- Project files are sized to the model's context window -------------------
 
     void projectFilesInThePromptFitTheModelsContext()
@@ -2012,6 +2268,795 @@ private slots:
         QCOMPARE(f.ai.requests.size(), 2);
         QCOMPARE(f.chat->messages()->all().last().content, QStringLiteral("final answer"));
         QVERIFY(!f.roles().contains(QStringLiteral("tool")));
+    }
+
+    // -- image generation settings ------------------------------------------------
+
+    void imageGenSettingsLoadAndSave()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        SettingsController &s = *f.settings;
+        // The QSettings file is shared by every test here, so restore defaults.
+        struct Reset
+        {
+            SettingsController &s;
+            ~Reset()
+            {
+                s.setImageGenUrl({});
+                s.setImageGenToken({});
+            }
+        } reset{s};
+
+        // Verify defaults are empty.
+        QCOMPARE(s.imageGenUrl(), QString{});
+        QCOMPARE(s.imageGenToken(), QString{});
+        QVERIFY(!s.imageGenReady());
+
+        // Set values and verify they are stored and read back.
+        s.setImageGenUrl(QStringLiteral("http://10.100.0.2:8189"));
+        s.setImageGenToken(QStringLiteral("secret-token"));
+        QCOMPARE(s.imageGenUrl(), QStringLiteral("http://10.100.0.2:8189"));
+        QCOMPARE(s.imageGenToken(), QStringLiteral("secret-token"));
+        QVERIFY(s.imageGenReady());
+
+        // Changing one does not affect the other; clearing url makes it not ready.
+        s.setImageGenUrl({});
+        QVERIFY(!s.imageGenReady());
+        QCOMPARE(s.imageGenUrl(), QString{});
+        QCOMPARE(s.imageGenToken(), QStringLiteral("secret-token"));
+    }
+
+    void imageGenReadyEmptyToken()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        SettingsController &s = *f.settings;
+        struct Reset
+        {
+            SettingsController &s;
+            ~Reset()
+            {
+                s.setImageGenUrl({});
+                s.setImageGenToken({});
+            }
+        } reset{s};
+
+        s.setImageGenUrl(QStringLiteral("http://10.100.0.2:8189"));
+        s.setImageGenToken(QStringLiteral("tok"));
+        QVERIFY(s.imageGenReady());
+
+        // Empty token also makes it not ready.
+        s.setImageGenToken({});
+        QVERIFY(!s.imageGenReady());
+    }
+
+    void imageGenReadyWhitespaceIsNotReady()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        SettingsController &s = *f.settings;
+        struct Reset
+        {
+            SettingsController &s;
+            ~Reset()
+            {
+                s.setImageGenUrl({});
+                s.setImageGenToken({});
+            }
+        } reset{s};
+
+        // Trimming: whitespace-only values are treated as empty.
+        s.setImageGenUrl(QStringLiteral("   "));
+        QVERIFY(!s.imageGenReady());
+        s.setImageGenUrl(QStringLiteral("http://10.100.0.2:8189"));
+        s.setImageGenToken(QStringLiteral("  "));
+        QVERIFY(!s.imageGenReady());
+    }
+
+    void imageGenSettingsChangedEmitPattern()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        SettingsController &s = *f.settings;
+        struct Reset
+        {
+            SettingsController &s;
+            ~Reset()
+            {
+                s.setImageGenUrl({});
+                s.setImageGenToken({});
+            }
+        } reset{s};
+
+        QSignalSpy spy(&s, &SettingsController::imageGenSettingsChanged);
+
+        // Setting to the same default value must not emit a signal.
+        s.setImageGenUrl({});
+        s.setImageGenToken({});
+        QCOMPARE(spy.count(), 0);
+
+        // Setting a non-default value must emit exactly once.
+        s.setImageGenUrl(QStringLiteral("http://10.100.0.2:8189"));
+        QCOMPARE(spy.count(), 1);
+        s.setImageGenToken(QStringLiteral("tok"));
+        QCOMPARE(spy.count(), 2);
+
+        // Setting to empty (different from current) must also emit.
+        s.setImageGenUrl({});
+        QCOMPARE(spy.count(), 3);
+    }
+
+    // -- image generation tool loop -------------------------------------------------
+
+    void generateImageRunsTheFullToolLoop()
+    {
+        if (!QFile::exists(QStringLiteral("/bin/sh")))
+            QSKIP("needs /bin/sh to fake an MCP server");
+        {
+            QTcpServer probe;
+            if (!probe.listen(QHostAddress::LocalHost, 0))
+                QSKIP("needs loopback networking");
+        }
+
+        // Fake image server responds: 202 on submit, then queued -> running -> succeeded.
+        FakeImageServer imgSrv;
+        QVERIFY(imgSrv.listen());
+        const QByteArray png = makeOnePixelPng();
+        imgSrv.imageBytes = png;
+        const QString jobId = QStringLiteral("j_12345678_000001_abcd");
+        // Submit: 202 with job object.
+        const QJsonObject submitResp{
+            {QStringLiteral("id"), jobId},
+            {QStringLiteral("object"), QStringLiteral("zimage.job")},
+            {QStringLiteral("status"), QStringLiteral("queued")},
+            {QStringLiteral("model"), QStringLiteral("zimage-scene")},
+            {QStringLiteral("queue_position"), 0},
+            {QStringLiteral("estimate_s"), 0},
+        };
+        imgSrv.routes[QStringLiteral("/v1/images/generations")] =
+            FakeImageServer::Route{202, QJsonDocument(submitResp).toJson(QJsonDocument::Compact)};
+
+        // Poll: queued -> running -> succeeded.
+        const QString pollPath = QStringLiteral("/v1/jobs/") + jobId;
+        imgSrv.pollResponses[pollPath] = {
+            // 1st poll: queued.
+            QJsonDocument{QJsonObject{
+                {QStringLiteral("status"), QStringLiteral("queued")},
+                {QStringLiteral("queue_position"), 1},
+                {QStringLiteral("estimate_s"), 120},
+                {QStringLiteral("progress"),
+                 QJsonObject{{"stage", "encode"}, {"percent", 0.0}}}}}.toJson(QJsonDocument::Compact),
+            // 2nd poll: running.
+            QJsonDocument{QJsonObject{
+                {QStringLiteral("status"), QStringLiteral("running")},
+                {QStringLiteral("queue_position"), 0},
+                {QStringLiteral("estimate_s"), 45},
+                {QStringLiteral("progress"),
+                 QJsonObject{{"stage", "sampling"}, {"percent", 50.0}}}}}.toJson(QJsonDocument::Compact),
+            // 3rd poll: succeeded.
+            QJsonDocument{QJsonObject{
+                {QStringLiteral("status"), QStringLiteral("succeeded")},
+                {QStringLiteral("queue_position"), 0},
+                {QStringLiteral("estimate_s"), 0},
+                {QStringLiteral("result"),
+                 QJsonObject{
+                     {QStringLiteral("width"), 1024},
+                     {QStringLiteral("height"), 1024},
+                     {QStringLiteral("seed"), 42},
+                     {QStringLiteral("preset"), QStringLiteral("zimage-scene")}}}}}.toJson(QJsonDocument::Compact)};
+
+        // Fake OpenAI server: first call returns generate_image tool call,
+        // second call returns plain text.
+        int aiCallCount = 0;
+        Fixture f([&](int i, const QJsonObject &)
+                  {
+                      ++aiCallCount;
+                      if (i == 0)
+                          return FakeOpenAi::toolCall(QStringLiteral("generate_image"),
+                                                      genImageArgs(QStringLiteral("a cat sitting on a wall")));
+                      return FakeOpenAi::text(QStringLiteral("here is your cat image"));
+                  });
+        QVERIFY(f.ok);
+
+        // Enable image generation in settings.
+        SettingsController &s = *f.settings;
+        struct Reset
+        {
+            SettingsController &s;
+            ~Reset()
+            {
+                s.setImageGenUrl({});
+                s.setImageGenToken({});
+                s.setModelTools(false);
+            }
+        } reset{s};
+        s.setImageGenUrl(imgSrv.url(QStringLiteral("/")));
+        s.setImageGenToken(QStringLiteral("test-token"));
+        s.setModelTools(true);
+
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("draw a cat")));
+
+        // The model should have been called twice: tool call + text reply.
+        QCOMPARE(aiCallCount, 2);
+
+        // Check the tool message content matches the exact format.
+        QString lastToolContent;
+        for (const ChatMessage &m : f.chat->messages()->all())
+        {
+            if (m.role == QLatin1String("tool")
+                && m.content.contains(QStringLiteral("job_id:")))
+            {
+                lastToolContent = m.content;
+            }
+        }
+        QVERIFY(!lastToolContent.isEmpty());
+        QVERIFY2(lastToolContent.startsWith(QStringLiteral("[generate_image]\n")), qPrintable(lastToolContent));
+        QVERIFY(lastToolContent.contains(
+            QStringLiteral("Image generated and shown to the user. job_id: j_12345678_000001_abcd; "
+                           "preset: zimage-scene; size: 1024x1024; seed: 42. "
+                           "You have not seen the image.")));
+
+        // Verify the PNG and JSON files exist under the data directory.
+        const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        const QString pngPath = dataDir + QStringLiteral("/images/") + jobId + QStringLiteral(".png");
+        const QString jsonPath = pngPath.left(pngPath.size() - 4) + QStringLiteral(".json");
+        QVERIFY(QFile::exists(pngPath));
+        QVERIFY(QFile::exists(jsonPath));
+
+        // Verify the PNG content matches.
+        QFile pngFile(pngPath);
+        QVERIFY(pngFile.open(QIODevice::ReadOnly));
+        QCOMPARE(pngFile.readAll(), png);
+
+        // Verify the JSON metadata.
+        QFile jsonFile(jsonPath);
+        QVERIFY(jsonFile.open(QIODevice::ReadOnly));
+        QJsonParseError parseErr;
+        const QJsonObject meta = QJsonDocument::fromJson(jsonFile.readAll(), &parseErr).object();
+        QCOMPARE(meta.value(QStringLiteral("job_id")).toString(), jobId);
+        QCOMPARE(meta.value(QStringLiteral("width")).toInt(), 1024);
+        QCOMPARE(meta.value(QStringLiteral("seed")).toInt(), 42);
+
+        // Verify the submit body included the size field.
+        {
+            QJsonParseError err;
+            const QJsonObject body =
+                QJsonDocument::fromJson(imgSrv.lastSubmitBody, &err).object();
+            QCOMPARE(err.error, QJsonParseError::NoError);
+            QCOMPARE(body.value(QStringLiteral("size")).toString(),
+                     QStringLiteral("1024x1024"));
+            QVERIFY(body.value(QStringLiteral("async")).toBool());
+        }
+
+        // The last model reply should be the text response.
+        QCOMPARE(f.chat->messages()->all().last().content, QStringLiteral("here is your cat image"));
+    }
+
+    void generateImageStopEndsCleanly()
+    {
+        // Verifies that stop() while a job is running sends DELETE to the
+        // image server and that no tool message with job_id: or cancelled is
+        // left behind (the epoch check drops it).
+        if (!QFile::exists(QStringLiteral("/bin/sh")))
+            QSKIP("needs /bin/sh to fake an MCP server");
+        {
+            QTcpServer probe;
+            if (!probe.listen(QHostAddress::LocalHost, 0))
+                QSKIP("needs loopback networking");
+        }
+
+        // Fake image server answers submit with 202, then always returns
+        // "running" for polls — the job never finishes on its own.
+        FakeImageServer imgSrv;
+        QVERIFY(imgSrv.listen());
+        const QString jobId = QStringLiteral("j_99999999_000001_dead");
+        const QJsonObject submitResp{
+            {QStringLiteral("id"), jobId},
+            {QStringLiteral("object"), QStringLiteral("zimage.job")},
+            {QStringLiteral("status"), QStringLiteral("queued")},
+            {QStringLiteral("model"), QStringLiteral("zimage-scene")},
+            {QStringLiteral("queue_position"), 0},
+            {QStringLiteral("estimate_s"), 0},
+        };
+        imgSrv.routes[QStringLiteral("/v1/images/generations")] =
+            FakeImageServer::Route{202, QJsonDocument(submitResp).toJson(QJsonDocument::Compact)};
+
+        // Poll: always "running" so the job never completes.
+        const QString pollPath = QStringLiteral("/v1/jobs/") + jobId;
+        const QByteArray runningResp = QJsonDocument{QJsonObject{
+            {QStringLiteral("status"), QStringLiteral("running")},
+            {QStringLiteral("queue_position"), 0},
+            {QStringLiteral("estimate_s"), 120},
+            {QStringLiteral("progress"),
+             QJsonObject{{"stage", "sampling"}, {"step", 1}, {"steps", 4}, {"percent", 20.0}}}}}.toJson(QJsonDocument::Compact);
+        imgSrv.pollResponses[pollPath] = {runningResp};
+
+        // Fake OpenAI server: first call returns generate_image tool call,
+        // second call returns plain text (used after stop).
+        Fixture f([&](int i, const QJsonObject &)
+                  {
+                      if (i == 0)
+                          return FakeOpenAi::toolCall(QStringLiteral("generate_image"),
+                                                      genImageArgs(QStringLiteral("a mountain at sunset")));
+                      return FakeOpenAi::text(QStringLiteral("done"));
+                  });
+        QVERIFY(f.ok);
+
+        SettingsController &s = *f.settings;
+        struct Reset
+        {
+            SettingsController &s;
+            ~Reset()
+            {
+                s.setImageGenUrl({});
+                s.setImageGenToken({});
+                s.setModelTools(false);
+            }
+        } reset{s};
+        s.setImageGenUrl(imgSrv.url(QStringLiteral("/")));
+        s.setImageGenToken(QStringLiteral("test-token"));
+        s.setModelTools(true);
+
+        f.chat->newChat();
+        f.chat->setComposerText(QStringLiteral("draw a mountain"));
+        f.chat->send();
+        QVERIFY(waitFor([&]() { return f.chat->streaming(); }));
+
+        // Wait for at least one poll to reach the server, so the job id is known.
+        QVERIFY(waitFor([&]() { return imgSrv.hits[pollPath] > 0; }));
+
+        // Press Stop while the job is still running.
+        f.chat->stop();
+
+        // The chat should no longer be streaming.
+        QVERIFY(waitFor([&]() { return !f.chat->streaming(); }));
+
+        // The server must receive the DELETE for the job.
+        QVERIFY(waitFor([&]() { return imgSrv.deleteHits > 0; }));
+
+        // No tool message with job_id: or "cancelled" was added.
+        bool foundToolMsg = false;
+        for (const ChatMessage &m : f.chat->messages()->all())
+        {
+            if (m.role == QLatin1String("tool"))
+            {
+                if (m.content.contains(QStringLiteral("job_id:"))
+                    || m.content.contains(QStringLiteral("cancelled")))
+                {
+                    foundToolMsg = true;
+                    break;
+                }
+            }
+        }
+        QVERIFY(!foundToolMsg);
+
+        // The chat is usable afterwards.
+        f.chat->setComposerText(QStringLiteral("again"));
+        f.chat->send();
+        QVERIFY(waitFor([&]() { return !f.chat->streaming(); }));
+    }
+
+    void generateImageEmptyPromptGivesError()
+    {
+        Fixture f([](int i, const QJsonObject &)
+                  {
+                      if (i == 0)
+                          return FakeOpenAi::toolCall(QStringLiteral("generate_image"),
+                                                      genImageArgs(QStringLiteral("")));
+                      return FakeOpenAi::text(QStringLiteral("done"));
+                  });
+        QVERIFY(f.ok);
+        SettingsController &s = *f.settings;
+        struct Reset
+        {
+            SettingsController &s;
+            ~Reset()
+            {
+                s.setImageGenUrl({});
+                s.setImageGenToken({});
+                s.setModelTools(false);
+            }
+        } reset{s};
+        s.setImageGenUrl(QStringLiteral("http://10.100.0.2:8189"));
+        s.setImageGenToken(QStringLiteral("secret"));
+        s.setModelTools(true);
+
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("draw")));
+
+        // The tool should have returned the empty-prompt error.
+        QString lastToolContent;
+        for (const ChatMessage &m : f.chat->messages()->all())
+        {
+            if (m.role == QLatin1String("tool"))
+                lastToolContent = m.content;
+        }
+        QVERIFY(lastToolContent.contains(QStringLiteral("prompt must not be empty")));
+    }
+
+    // -- Step 12: stop the "final write" re-prompts after an image ----------------
+
+    void anImageCaptionEndingInLetMeKnowIsNotReprompted()
+    {
+        // The image server responds: 202 on submit, then queued -> running -> succeeded.
+        FakeImageServer imgSrv;
+        QVERIFY(imgSrv.listen());
+        const QByteArray png = makeOnePixelPng();
+        imgSrv.imageBytes = png;
+        const QString jobId = QStringLiteral("j_22222222_000001_babe");
+        const QJsonObject submitResp{
+            {QStringLiteral("id"), jobId},
+            {QStringLiteral("object"), QStringLiteral("zimage.job")},
+            {QStringLiteral("status"), QStringLiteral("queued")},
+            {QStringLiteral("model"), QStringLiteral("zimage-scene")},
+            {QStringLiteral("queue_position"), 0},
+            {QStringLiteral("estimate_s"), 0},
+        };
+        imgSrv.routes[QStringLiteral("/v1/images/generations")] =
+            FakeImageServer::Route{202, QJsonDocument(submitResp).toJson(QJsonDocument::Compact)};
+
+        const QString pollPath = QStringLiteral("/v1/jobs/") + jobId;
+        imgSrv.pollResponses[pollPath] = {
+            QJsonDocument{QJsonObject{
+                {QStringLiteral("status"), QStringLiteral("queued")},
+                {QStringLiteral("queue_position"), 1},
+                {QStringLiteral("estimate_s"), 120},
+                {QStringLiteral("progress"),
+                 QJsonObject{{"stage", "encode"}, {"percent", 0.0}}}}}.toJson(QJsonDocument::Compact),
+            QJsonDocument{QJsonObject{
+                {QStringLiteral("status"), QStringLiteral("running")},
+                {QStringLiteral("queue_position"), 0},
+                {QStringLiteral("estimate_s"), 45},
+                {QStringLiteral("progress"),
+                 QJsonObject{{"stage", "sampling"}, {"percent", 50.0}}}}}.toJson(QJsonDocument::Compact),
+            QJsonDocument{QJsonObject{
+                {QStringLiteral("status"), QStringLiteral("succeeded")},
+                {QStringLiteral("queue_position"), 0},
+                {QStringLiteral("estimate_s"), 0},
+                {QStringLiteral("result"),
+                 QJsonObject{
+                     {QStringLiteral("width"), 1024},
+                     {QStringLiteral("height"), 1024},
+                     {QStringLiteral("seed"), 42},
+                     {QStringLiteral("preset"), QStringLiteral("zimage-scene")}}}}}.toJson(QJsonDocument::Compact)};
+
+        int aiCallCount = 0;
+        Fixture f([&](int i, const QJsonObject &)
+                  {
+                      ++aiCallCount;
+                      if (i == 0)
+                          return FakeOpenAi::toolCall(QStringLiteral("generate_image"),
+                                                      genImageArgs(QStringLiteral("a cat")));
+                      return FakeOpenAi::text(QStringLiteral("Here is your cat! Let me know if you'd like another."));
+                  });
+        QVERIFY(f.ok);
+
+        SettingsController &s = *f.settings;
+        struct Reset
+        {
+            SettingsController &s;
+            ~Reset()
+            {
+                s.setImageGenUrl({});
+                s.setImageGenToken({});
+                s.setModelTools(false);
+            }
+        } reset{s};
+        s.setImageGenUrl(imgSrv.url(QStringLiteral("/")));
+        s.setImageGenToken(QStringLiteral("test-token"));
+        s.setModelTools(true);
+
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("draw a cat")));
+
+        // The model was called twice: tool call + caption reply.
+        // Part 2 (m_imageShown) ensures shouldForceFinalWrite returns false after an image.
+        QCOMPARE(aiCallCount, 2);
+
+        // The last message is exactly the caption, with no extra assistant messages.
+        QCOMPARE(f.chat->messages()->all().last().content,
+                 QStringLiteral("Here is your cat! Let me know if you'd like another."));
+    }
+
+    void anImageCaptionSayingIllIsNotReprompted()
+    {
+        // Same harness as above; the reply contains "I'll " which looksLikeToolPreface
+        // would match. Without m_imageShown the model would be re-prompted.
+        FakeImageServer imgSrv;
+        QVERIFY(imgSrv.listen());
+        const QByteArray png = makeOnePixelPng();
+        imgSrv.imageBytes = png;
+        const QString jobId = QStringLiteral("j_33333333_000001_cafe");
+        const QJsonObject submitResp{
+            {QStringLiteral("id"), jobId},
+            {QStringLiteral("object"), QStringLiteral("zimage.job")},
+            {QStringLiteral("status"), QStringLiteral("queued")},
+            {QStringLiteral("model"), QStringLiteral("zimage-scene")},
+            {QStringLiteral("queue_position"), 0},
+            {QStringLiteral("estimate_s"), 0},
+        };
+        imgSrv.routes[QStringLiteral("/v1/images/generations")] =
+            FakeImageServer::Route{202, QJsonDocument(submitResp).toJson(QJsonDocument::Compact)};
+
+        const QString pollPath = QStringLiteral("/v1/jobs/") + jobId;
+        imgSrv.pollResponses[pollPath] = {
+            QJsonDocument{QJsonObject{
+                {QStringLiteral("status"), QStringLiteral("queued")},
+                {QStringLiteral("queue_position"), 1},
+                {QStringLiteral("estimate_s"), 120},
+                {QStringLiteral("progress"),
+                 QJsonObject{{"stage", "encode"}, {"percent", 0.0}}}}}.toJson(QJsonDocument::Compact),
+            QJsonDocument{QJsonObject{
+                {QStringLiteral("status"), QStringLiteral("running")},
+                {QStringLiteral("queue_position"), 0},
+                {QStringLiteral("estimate_s"), 45},
+                {QStringLiteral("progress"),
+                 QJsonObject{{"stage", "sampling"}, {"percent", 50.0}}}}}.toJson(QJsonDocument::Compact),
+            QJsonDocument{QJsonObject{
+                {QStringLiteral("status"), QStringLiteral("succeeded")},
+                {QStringLiteral("queue_position"), 0},
+                {QStringLiteral("estimate_s"), 0},
+                {QStringLiteral("result"),
+                 QJsonObject{
+                     {QStringLiteral("width"), 1024},
+                     {QStringLiteral("height"), 1024},
+                     {QStringLiteral("seed"), 42},
+                     {QStringLiteral("preset"), QStringLiteral("zimage-scene")}}}}}.toJson(QJsonDocument::Compact)};
+
+        int aiCallCount = 0;
+        Fixture f([&](int i, const QJsonObject &)
+                  {
+                      ++aiCallCount;
+                      if (i == 0)
+                          return FakeOpenAi::toolCall(QStringLiteral("generate_image"),
+                                                      genImageArgs(QStringLiteral("a dog")));
+                      return FakeOpenAi::text(QStringLiteral("I'll make another one if you want."));
+                  });
+        QVERIFY(f.ok);
+
+        SettingsController &s = *f.settings;
+        struct Reset
+        {
+            SettingsController &s;
+            ~Reset()
+            {
+                s.setImageGenUrl({});
+                s.setImageGenToken({});
+                s.setModelTools(false);
+            }
+        } reset{s};
+        s.setImageGenUrl(imgSrv.url(QStringLiteral("/")));
+        s.setImageGenToken(QStringLiteral("test-token"));
+        s.setModelTools(true);
+
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("draw a dog")));
+
+        QCOMPARE(aiCallCount, 2);
+        QCOMPARE(f.chat->messages()->all().last().content,
+                 QStringLiteral("I'll make another one if you want."));
+    }
+
+    void aNonImageToolReplyWithLetMeKnowIsNotReprompted()
+    {
+        // "Let me know" is stripped from the lowercased text before the "let me" check,
+        // so even for non-image tools this phrase should not trigger a re-prompt.
+        QTemporaryDir cfg;
+        QVERIFY(cfg.isValid());
+        QDir().mkpath(cfg.filePath(QStringLiteral("shammy/skills/greeter")));
+        QFile skill(cfg.filePath(QStringLiteral("shammy/skills/greeter/SKILL.md")));
+        QVERIFY(skill.open(QIODevice::WriteOnly));
+        skill.write("---\nname: greeter\ndescription: A greeter skill.\n---\nAlways say ahoy.\n");
+        skill.close();
+        const QByteArray oldXdg = qgetenv("XDG_CONFIG_HOME");
+        qputenv("XDG_CONFIG_HOME", cfg.path().toUtf8());
+        struct Restore
+        {
+            QByteArray v;
+            ~Restore()
+            {
+                if (v.isEmpty())
+                    qunsetenv("XDG_CONFIG_HOME");
+                else
+                    qputenv("XDG_CONFIG_HOME", v);
+            }
+        } restore{oldXdg};
+
+        int aiCallCount = 0;
+        Fixture f([&](int i, const QJsonObject &)
+                  {
+                      ++aiCallCount;
+                      if (i == 0)
+                          return FakeOpenAi::toolCall(QStringLiteral("load_skill"), QStringLiteral("{\"name\":\"greeter\"}"));
+                      return FakeOpenAi::text(QStringLiteral("Done. Let me know if you need anything else."));
+                  });
+        QVERIFY(f.ok);
+
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("hello")));
+
+        // Only two calls: tool call + final reply. "Let me know" does not trigger re-prompt.
+        QCOMPARE(aiCallCount, 2);
+        QCOMPARE(f.chat->messages()->all().last().content,
+                 QStringLiteral("Done. Let me know if you need anything else."));
+    }
+
+    void aNonImageToolReplyWithLetMePrefaceIsReprompted()
+    {
+        // "Let me look that up." still triggers a re-prompt: "let me" remains after
+        // stripping "let me know". No trailing colon, so only the "let me" check fires.
+        QTemporaryDir cfg;
+        QVERIFY(cfg.isValid());
+        QDir().mkpath(cfg.filePath(QStringLiteral("shammy/skills/greeter")));
+        QFile skill(cfg.filePath(QStringLiteral("shammy/skills/greeter/SKILL.md")));
+        QVERIFY(skill.open(QIODevice::WriteOnly));
+        skill.write("---\nname: greeter\ndescription: A greeter skill.\n---\nAlways say ahoy.\n");
+        skill.close();
+        const QByteArray oldXdg = qgetenv("XDG_CONFIG_HOME");
+        qputenv("XDG_CONFIG_HOME", cfg.path().toUtf8());
+        struct Restore
+        {
+            QByteArray v;
+            ~Restore()
+            {
+                if (v.isEmpty())
+                    qunsetenv("XDG_CONFIG_HOME");
+                else
+                    qputenv("XDG_CONFIG_HOME", v);
+            }
+        } restore{oldXdg};
+
+        int aiCallCount = 0;
+        Fixture f([&](int i, const QJsonObject &)
+                  {
+                      ++aiCallCount;
+                      if (i == 0)
+                          return FakeOpenAi::toolCall(QStringLiteral("load_skill"), QStringLiteral("{\"name\":\"greeter\"}"));
+                      if (i == 1)
+                          return FakeOpenAi::text(QStringLiteral("Let me look that up."));
+                      return FakeOpenAi::text(QStringLiteral("found it"));
+                  });
+        QVERIFY(f.ok);
+
+        f.chat->newChat();
+        QVERIFY(f.say(QStringLiteral("hello")));
+
+        // Three calls: tool call + preface (triggers re-prompt) + final reply.
+        QCOMPARE(aiCallCount, 3);
+    }
+
+    // -- imageForMessage, saveImageAs, copyImageToClipboard ------------------------
+
+    void imageForMessageFindsFiles()
+    {
+        const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        const QString imgDir = dataDir + QStringLiteral("/images");
+        QDir(imgDir).mkpath(".");
+
+        const QString jobId = QStringLiteral("j_12345678_000001_abcd");
+        const QString pngPath = imgDir + QStringLiteral("/") + jobId + QStringLiteral(".png");
+        const QString jsonPath = pngPath.left(pngPath.size() - 4) + QStringLiteral(".json");
+
+        QFile pngFile(pngPath);
+        QVERIFY(pngFile.open(QIODevice::WriteOnly));
+        pngFile.write(makeOnePixelPng());
+        pngFile.close();
+
+        QJsonObject meta;
+        meta.insert(QStringLiteral("job_id"), jobId);
+        meta.insert(QStringLiteral("prompt"), QStringLiteral("a cat"));
+        meta.insert(QStringLiteral("preset"), QStringLiteral("zimage-scene"));
+        meta.insert(QStringLiteral("seed"), QJsonValue(42));
+        meta.insert(QStringLiteral("width"), 1024);
+        meta.insert(QStringLiteral("height"), 1024);
+        meta.insert(QStringLiteral("created"), QDateTime::currentDateTime().toString(Qt::ISODate));
+        QFile jsonFile(jsonPath);
+        QVERIFY(jsonFile.open(QIODevice::WriteOnly));
+        jsonFile.write(QJsonDocument(meta).toJson(QJsonDocument::Compact));
+        jsonFile.close();
+
+        const QString toolContent =
+            QStringLiteral("Image generated and shown to the user. job_id: %1; preset: zimage-scene; size: 1024x1024; seed: 42. You have not seen the image.").arg(jobId);
+
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        QVariantMap result = f.chat->imageForMessage(toolContent);
+
+        QCOMPARE(result.value(QStringLiteral("path")).toString(), pngPath);
+        QCOMPARE(result.value(QStringLiteral("url")).toString(), QUrl::fromLocalFile(pngPath).toString());
+        QCOMPARE(result.value(QStringLiteral("prompt")).toString(), QStringLiteral("a cat"));
+        QCOMPARE(result.value(QStringLiteral("preset")).toString(), QStringLiteral("zimage-scene"));
+        QCOMPARE(result.value(QStringLiteral("seed")).toLongLong(), 42LL);
+        QCOMPARE(result.value(QStringLiteral("width")).toInt(), 1024);
+        QCOMPARE(result.value(QStringLiteral("height")).toInt(), 1024);
+
+        // Clean up the test files.
+        QFile::remove(pngPath);
+        QFile::remove(jsonPath);
+    }
+
+    void imageForMessageReturnsEmptyForPlainText()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        const QString plainText = QStringLiteral("[generate_image]\nA plain text response without a job id.");
+        QVariantMap result = f.chat->imageForMessage(plainText);
+        QVERIFY(result.isEmpty());
+    }
+
+    void imageForMessageReturnsEmptyWhenFilesGone()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        const QString toolContent =
+            QStringLiteral("Image generated and shown to the user. job_id: j_12345678_000001_abcd; preset: zimage-scene; size: 1024x1024; seed: 42. You have not seen the image.");
+        QVariantMap result = f.chat->imageForMessage(toolContent);
+        QVERIFY(result.isEmpty());
+    }
+
+    void saveImageAsCopiesByteIdentically()
+    {
+        QTemporaryDir tmpDir;
+        QVERIFY(tmpDir.isValid());
+
+        const QString srcPath = tmpDir.filePath(QStringLiteral("src.png"));
+        QFile srcFile(srcPath);
+        QVERIFY(srcFile.open(QIODevice::WriteOnly));
+        srcFile.write(makeOnePixelPng());
+        srcFile.close();
+
+        const QString dstPath = tmpDir.filePath(QStringLiteral("dst.png"));
+        const QUrl dstUrl = QUrl::fromLocalFile(dstPath);
+
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        QVERIFY(f.chat->saveImageAs(srcPath, dstUrl));
+
+        QFile dstFile(dstPath);
+        QVERIFY(dstFile.open(QIODevice::ReadOnly));
+        QCOMPARE(dstFile.readAll(), makeOnePixelPng());
+    }
+
+    void saveImageAsOverwritesExistingFile()
+    {
+        // "Save as…" onto an existing file (the dialog already asked) replaces it.
+        QTemporaryDir tmpDir;
+        QVERIFY(tmpDir.isValid());
+        const QString srcPath = tmpDir.filePath(QStringLiteral("src.png"));
+        const QString dstPath = tmpDir.filePath(QStringLiteral("dst.png"));
+        QFile srcFile(srcPath);
+        QVERIFY(srcFile.open(QIODevice::WriteOnly));
+        srcFile.write(makeOnePixelPng());
+        srcFile.close();
+        QFile oldFile(dstPath);
+        QVERIFY(oldFile.open(QIODevice::WriteOnly));
+        oldFile.write("old contents");
+        oldFile.close();
+
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        QVERIFY(f.chat->saveImageAs(srcPath, QUrl::fromLocalFile(dstPath)));
+
+        QFile dstFile(dstPath);
+        QVERIFY(dstFile.open(QIODevice::ReadOnly));
+        QCOMPARE(dstFile.readAll(), makeOnePixelPng());
+    }
+
+    void saveImageAsReturnsFalseForMissingSource()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        const QUrl dst = QUrl::fromLocalFile(QStandardPaths::writableLocation(QStandardPaths::TempLocation) + QStringLiteral("/no_such_file.png"));
+        QVERIFY(!f.chat->saveImageAs(QStringLiteral("/nonexistent/path/img.png"), dst));
+    }
+
+    void copyImageToClipboardReturnsFalseForMissing()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        QVERIFY(!f.chat->copyImageToClipboard(QStringLiteral("/nonexistent/path/img.png")));
     }
 };
 
