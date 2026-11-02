@@ -1,3 +1,18 @@
+shammy (0.15.0-1) unstable; urgency=medium
+
+  * Image generation: with a zimage-gw server set in Settings -> Image
+    generation and Tools on, the model can call generate_image. Progress
+    (queue, stage, percent, time left) shows in the thread; the PNG and a
+    JSON sidecar are saved under the data folder's images/, with Save as...
+    and Copy. Stop cancels the job on the server.
+  * Clicking a generated image opens a pop-out viewer: zoom (+, -, wheel,
+    drag to pan), Fit (0), Copy (Ctrl+C), Full screen (f), and a control bar
+    that fades out when the mouse rests.
+  * A caption after a tool result is no longer followed by a re-prompt and
+    apologies about missing artifacts.
+
+ -- Bryan Christ <bryan.christ@gmail.com>  Mon, 02 Nov 2026 15:56:46 -0600
+
 shammy (0.14.0-1) unstable; urgency=medium
 
   * Agent skills: SKILL.md folders under ~/.config/shammy/skills (macOS:
