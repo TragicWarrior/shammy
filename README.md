@@ -197,7 +197,33 @@ with a search key set (Settings → General → Web search), `web_search`.
   *any* address it resolves to is not public. Redirects are followed by hand
   and every hop gets the same checks. The check cannot stop a DNS server that
   answers differently the second time (DNS rebinding); it narrows that window
-  but does not close it.
+   but does not close it.
+
+## Image generation
+
+When Settings → Image generation has a server URL and token, and **Tools** is
+on for a model, it can call `generate_image`. The server is zimage-gw, a plain
+HTTP service; every user shares one FIFO queue so a picture may wait its turn.
+
+| Subject / quality | Preset | Typical time |
+|---|---|---|
+| scene / draft | `zimage-scene-draft` | ~60 s |
+| scene / normal | `zimage-scene` | ~80 s |
+| people / draft | `zimage-people-quick` | ~160 s |
+| people / normal | `zimage-people` | ~260 s |
+| any / max | `zimage-max` | ~10 min |
+
+The model passes `prompt`, `subject` (scene or people), `aspect`
+(square, landscape, portrait), `quality` (draft, normal, max) and an optional
+`seed`. The request goes through Shammy's own network connection; it is never
+parsed as the model's reply. While the server works, the conversation shows
+progress (stage, percentage, queue position). When the image is ready it is
+saved as a PNG under Shammy's data folder (`images/<job_id>.png`) alongside a
+short JSON metadata file. The model receives a brief tool-result text and
+never sees the image.
+
+The generated image appears in the chat with its prompt as a caption, and
+"Save as…" / "Copy" actions. **Stop** sends a cancel request to the server.
 
 ## Skills and commands
 

@@ -73,6 +73,8 @@ set(CORE_SOURCES
     src/shell/ShellCommand.h
     src/websearch/WebSearch.cpp
     src/websearch/WebSearch.h
+    src/imagegen/ImageGen.cpp
+    src/imagegen/ImageGen.h
     src/Util.h
 )
 

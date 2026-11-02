@@ -1,4 +1,5 @@
 #include "controllers/ChatController.h"
+#include "imagegen/ImageGen.h"
 #include "openai/ModelCaps.h"
 #include "Util.h"
 #include "artifacts/ArtifactExtractor.h"
@@ -140,7 +141,11 @@ static bool looksLikeToolPreface(const QString &content)
     if (!ArtifactExtractor::extract(t).isEmpty())
         return false;
     const QString l = t.toLower();
-    return l.contains(QLatin1String("let me"))
+    // Strip "let me know" before checking for "let me" so a caption like
+    // "Let me know if you'd like another." does not trigger a re-prompt.
+    QString l2 = l;
+    l2.remove(QLatin1String("let me know"));
+    return l2.contains(QLatin1String("let me"))
         || l.contains(QLatin1String("i'll "))
         || l.contains(QLatin1String("i will "))
         || l.contains(QLatin1String("now i have"))
@@ -233,6 +238,62 @@ void ChatController::copyText(const QString &text)
     QClipboard *cb = QGuiApplication::clipboard();
     if (cb)
         cb->setText(text);
+}
+
+// Look up the image files for a tool message and return the PNG path, URL and metadata.
+// Returns an empty map if no image is found for the tool content.
+QVariantMap ChatController::imageForMessage(const QString &toolContent) const
+{
+    const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QString jobId;
+    QString path;
+    QJsonObject fields;
+    if (!ImageGen::imageForToolResult(toolContent, dataDir, jobId, path, fields))
+    {
+        return {};
+    }
+    QVariantMap out;
+    out.insert(QStringLiteral("path"), path);
+    out.insert(QStringLiteral("url"), QUrl::fromLocalFile(path).toString());
+    out.insert(QStringLiteral("prompt"), fields.value(QStringLiteral("prompt")).toString());
+    out.insert(QStringLiteral("preset"), fields.value(QStringLiteral("preset")).toString());
+    const qint64 seed = fields.value(QStringLiteral("seed")).toInteger(-1);
+    out.insert(QStringLiteral("seed"), seed);
+    out.insert(QStringLiteral("width"), fields.value(QStringLiteral("width")).toInt());
+    out.insert(QStringLiteral("height"), fields.value(QStringLiteral("height")).toInt());
+    return out;
+}
+
+// Copy the PNG file at `path` to `dest` (overwrite if it exists); false on failure.
+bool ChatController::saveImageAs(const QString &path, const QUrl &dest)
+{
+    const QString destPath = dest.toLocalFile();
+    if (destPath.isEmpty() || !QFile::exists(path))
+    {
+        return false;
+    }
+    // QFile::copy refuses to overwrite; the save dialog has already confirmed it.
+    if (QFile::exists(destPath) && !QFile::remove(destPath))
+    {
+        return false;
+    }
+    return QFile::copy(path, destPath);
+}
+
+// Load the PNG at `path` into the system clipboard as an image; false on failure.
+bool ChatController::copyImageToClipboard(const QString &path)
+{
+    QImage img(path);
+    if (img.isNull())
+    {
+        return false;
+    }
+    QClipboard *cb = QGuiApplication::clipboard();
+    if (cb)
+    {
+        cb->setImage(img);
+    }
+    return true;
 }
 
 void ChatController::setArtifactPaneOpen(bool v)
@@ -542,6 +603,7 @@ void ChatController::beginSession(bool priv)
     m_toolRounds = 0;
     m_forceFinalWrite = false;
     m_finalWriteAttempts = 0;
+    m_imageShown = false;
     m_sessionAllow.clear();
     m_permOnce = false;
     m_permOpen = false;
@@ -616,6 +678,7 @@ void ChatController::openConversation(const QString &id)
             m_toolRounds = 0;
             m_forceFinalWrite = false;
             m_finalWriteAttempts = 0;
+            m_imageShown = false;
         }
     }
     const Conversation c = m_store->conversation(id);
@@ -1256,6 +1319,7 @@ bool ChatController::send()
     m_toolRounds = 0;
     m_forceFinalWrite = false;
     m_finalWriteAttempts = 0;
+    m_imageShown = false;
     startGeneration();
     return true;
 }
@@ -1480,9 +1544,12 @@ void ChatController::endGeneration()
     // download for nobody. (Their callbacks fire, but the epoch above drops them.)
     m_web.cancelAll();
     m_shell.cancelAll();
+    // Cancel an in-flight image generation job so it does not keep the server busy.
+    m_imageGen.cancel();
     m_toolRounds = 0;
     m_forceFinalWrite = false;
     m_finalWriteAttempts = 0;
+    m_imageShown = false;
     setToolActivity({});
     // A permission prompt belongs to this generation; don't strand it open.
     if (m_permOpen)
@@ -1650,6 +1717,11 @@ void ChatController::startGeneration()
             req.tools.append(Skills::toolDefinition());
         if (webSearchActive())
             req.tools.append(WebSearch::toolDefinition());
+        // Offer generate_image when an image server is configured and Tools is on.
+        if (m_settings->imageGenReady() && m_settings->modelTools())
+        {
+            req.tools.append(ImageGen::toolDefinition());
+        }
     }
     req.temperature = m_settings->temperature();
     req.topP = m_settings->topP();
@@ -2223,6 +2295,12 @@ bool ChatController::shouldForceFinalWrite(const QJsonArray &leftoverCalls) cons
         return false;
     if (!leftoverCalls.isEmpty())
         return true;
+    // After an image the reply is a caption, and the artifact nudge only
+    // confuses the model into apologising for missing artifacts.
+    if (m_imageShown)
+    {
+        return false;
+    }
     return looksLikeToolPreface(genLast().content);
 }
 
@@ -2466,6 +2544,79 @@ void ChatController::executeOneTool()
         });
         return;
     }
+    if (name == QLatin1String("generate_image"))
+    {
+        // Parse the tool arguments and start an async image generation job.
+        m_toolFingerprints.insert(fp);
+        QJsonParseError perr;
+        const QJsonDocument adoc = QJsonDocument::fromJson(argsStr.toUtf8(), &perr);
+        const QJsonObject args = adoc.isObject() ? adoc.object() : QJsonObject{};
+        const QString prompt = args.value(QStringLiteral("prompt")).toString().trimmed();
+        const QString subject = args.value(QStringLiteral("subject")).toString().trimmed();
+        const QString aspect = args.value(QStringLiteral("aspect")).toString().trimmed();
+        const QString quality = args.value(QStringLiteral("quality")).toString().trimmed();
+        const qint64 seed = args.value(QStringLiteral("seed")).toInteger(-1);
+        if (prompt.isEmpty())
+        {
+            deliver(QStringLiteral("generate_image"), QStringLiteral("The prompt must not be empty."));
+            return;
+        }
+        const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        ImageGen::ImageJobSpec spec;
+        spec.baseUrl = QUrl(m_settings->imageGenUrl());
+        spec.token = m_settings->imageGenToken();
+        spec.preset = ImageGen::presetFor(subject, quality);
+        spec.prompt = prompt;
+        spec.aspect = ImageGen::aspectFromSize(aspect);
+        spec.seed = seed;
+        spec.dataDirectory = dataDir;
+        // Disconnect any previous image-gen connections before wiring new ones.
+        disconnect(m_imageGenProgressConn);
+        disconnect(m_imageGenFinishedConn);
+        disconnect(m_imageGenFailedConn);
+        setToolActivity(QStringLiteral("Starting image generation…"));
+        // Connect progress to the tool-activity label shown in the conversation.
+        m_imageGenProgressConn = connect(&m_imageGen, &ImageGen::progress, this, [this](const QString &, const QString &text)
+        {
+            setToolActivity(text);
+        });
+        // On success: look up width/height/seed from the JSON file and deliver the result.
+        m_imageGenFinishedConn = connect(&m_imageGen, &ImageGen::finished, this, [this, deliver, id, dataDir](const QString &jobId, const QString &path)
+        {
+            disconnect(m_imageGenProgressConn);
+            disconnect(m_imageGenFinishedConn);
+            disconnect(m_imageGenFailedConn);
+            QString foundJobId;
+            QString foundPath;
+            QJsonObject fields;
+            if (ImageGen::imageForToolResult(
+                    ImageGen::formatToolResult(jobId, {}, 0, 0, -1), dataDir, foundJobId, foundPath, fields))
+            {
+                const QString preset = fields.value(QStringLiteral("preset")).toString();
+                const int width = fields.value(QStringLiteral("width")).toInt();
+                const int height = fields.value(QStringLiteral("height")).toInt();
+                const qint64 seedVal = fields.value(QStringLiteral("seed")).toInteger(-1);
+                // Mark that an image has been shown so shouldForceFinalWrite
+                // does not re-prompt the model with an artifact nudge.
+                m_imageShown = true;
+                deliver(QStringLiteral("generate_image"), ImageGen::formatToolResult(jobId, preset, width, height, seedVal));
+            }
+            else
+            {
+                deliver(QStringLiteral("generate_image"), QStringLiteral("Image saved but metadata could not be read."));
+            }
+        });
+        // On failure: map the error and deliver it.
+        m_imageGenFailedConn = connect(&m_imageGen, &ImageGen::failed, this, [this, deliver, id](const QString &jobId, const QString &error)
+        {
+            disconnect(m_imageGenProgressConn);
+            disconnect(m_imageGenFinishedConn);
+            disconnect(m_imageGenFailedConn);
+            deliver(QStringLiteral("generate_image"), error);
+        });
+        m_imageGen.start(spec);
+        return;
+    }
     const McpTool tool = m_mcp->host()->findTool(name);
     const QString key = tool.server + QLatin1Char('/') + tool.name;
     const bool allowed = m_sessionAllow.contains(key) || m_store->isAlwaysAllowed(tool.server, tool.name)
@@ -2588,6 +2739,7 @@ void ChatController::dropMessagesFrom(int from)
         m_toolRounds = 0;
         m_forceFinalWrite = false;
         m_finalWriteAttempts = 0;
+        m_imageShown = false;
         refreshContextUsage();
         return;
     }

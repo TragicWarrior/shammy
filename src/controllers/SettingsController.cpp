@@ -3,6 +3,7 @@
 #include "artifacts/DocxExport.h"
 #include "artifacts/PdfExtract.h"
 #include "compact/Compactor.h"
+#include "imagegen/ImageGen.h"
 #include "openai/ModelCaps.h"
 #include "shell/ShellCommand.h"
 #include "skills/Skills.h"
@@ -61,6 +62,17 @@ SettingsController::SettingsController(Store *store, OpenAiClient *client, QObje
         m_qs.value(QStringLiteral("webFetchStallSeconds"), WebFetchOptions::kDefaultStallSeconds).toInt());
     m_webFetchTimeoutSeconds = clampTimeoutSeconds(
         m_qs.value(QStringLiteral("webFetchTimeoutSeconds"), WebFetchOptions::kDefaultTotalSeconds).toInt());
+
+    // Load image generation settings from QSettings.
+    m_imageGenUrl = m_qs.value(QStringLiteral("imageGenUrl")).toString();
+    m_imageGenToken = m_qs.value(QStringLiteral("imageGenToken")).toString();
+
+    // Create the ImageGen client and relay its connectionTested signal.
+    m_imageGen = new ImageGen(this);
+    connect(m_imageGen, &ImageGen::connectionTested, this, [this](bool ok, const QString &message)
+            {
+                emit imageGenTestResult(ok, message);
+            });
 
     reloadBackends();
     m_backendId = m_store->setting(QStringLiteral("current_backend"));
@@ -334,6 +346,48 @@ void SettingsController::setWebSearchApiKey(const QString &k)
 bool SettingsController::webSearchReady() const
 {
     return m_webSearchEnabled && !m_webSearchApiKey.trimmed().isEmpty();
+}
+
+// Update the image generation server URL and persist it.
+void SettingsController::setImageGenUrl(const QString &url)
+{
+    if (m_imageGenUrl == url)
+    {
+        return;
+    }
+    m_imageGenUrl = url;
+    m_qs.setValue(QStringLiteral("imageGenUrl"), url);
+    emit imageGenSettingsChanged();
+}
+
+// Update the image generation token and persist it.
+void SettingsController::setImageGenToken(const QString &token)
+{
+    if (m_imageGenToken == token)
+    {
+        return;
+    }
+    m_imageGenToken = token;
+    m_qs.setValue(QStringLiteral("imageGenToken"), token);
+    emit imageGenSettingsChanged();
+}
+
+// True when both URL and token are set (feature is enabled).
+bool SettingsController::imageGenReady() const
+{
+    return !m_imageGenUrl.trimmed().isEmpty() && !m_imageGenToken.trimmed().isEmpty();
+}
+
+// Call GET /v1/health on the given server URL and emit the result.
+void SettingsController::testImageConnection(const QString &url)
+{
+    QString trimmed = url.trimmed();
+    if (trimmed.isEmpty())
+    {
+        emit imageGenTestResult(false, QStringLiteral("no server URL"));
+        return;
+    }
+    m_imageGen->testConnection(QUrl(trimmed));
 }
 
 void SettingsController::setWebFetchStallSeconds(int seconds)

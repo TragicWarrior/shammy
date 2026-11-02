@@ -27,6 +27,7 @@ shammy_test(test_claude_import)
 shammy_test(test_skills)
 shammy_test(test_shell_command)
 shammy_test(test_ollama_native)
+shammy_test(test_image_gen)
 
 # Controller-level tests: the controllers and list models live in the app target
 # (next to the QML module), so build the few they need directly into each test.

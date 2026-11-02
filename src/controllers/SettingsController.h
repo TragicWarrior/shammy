@@ -5,6 +5,8 @@
 #include "persist/Store.h"
 #include "websearch/WebSearch.h"
 
+class ImageGen;
+
 #include <QMap>
 #include <QObject>
 #include <QSet>
@@ -205,6 +207,16 @@ public:
     void setWebSearchApiKey(const QString &k);
     bool webSearchReady() const;
 
+    Q_PROPERTY(QString imageGenUrl READ imageGenUrl WRITE setImageGenUrl NOTIFY imageGenSettingsChanged)
+    Q_PROPERTY(QString imageGenToken READ imageGenToken WRITE setImageGenToken NOTIFY imageGenSettingsChanged)
+    Q_PROPERTY(bool imageGenReady READ imageGenReady NOTIFY imageGenSettingsChanged)
+    QString imageGenUrl() const { return m_imageGenUrl; }
+    void setImageGenUrl(const QString &url);
+    QString imageGenToken() const { return m_imageGenToken; }
+    void setImageGenToken(const QString &token);
+    bool imageGenReady() const;
+    Q_INVOKABLE void testImageConnection(const QString &url);
+
     int webFetchStallSeconds() const { return m_webFetchStallSeconds; }
     void setWebFetchStallSeconds(int seconds);
     int webFetchTimeoutSeconds() const { return m_webFetchTimeoutSeconds; }
@@ -253,7 +265,9 @@ signals:
     void loadingModelsChanged();
     void modelCapsChanged();
     void webSearchChanged();
+    void imageGenSettingsChanged();
     void webFetchChanged();
+    void imageGenTestResult(bool ok, const QString &message);
 
 private:
     void reloadBackends();
@@ -319,4 +333,7 @@ private:
     QString m_webSearchApiKey;
     int m_webFetchStallSeconds = WebFetchOptions::kDefaultStallSeconds;
     int m_webFetchTimeoutSeconds = WebFetchOptions::kDefaultTotalSeconds;
+    QString m_imageGenUrl;
+    QString m_imageGenToken;
+    ImageGen *m_imageGen = nullptr;
 };
