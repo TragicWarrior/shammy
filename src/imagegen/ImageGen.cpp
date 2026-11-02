@@ -149,7 +149,7 @@ QString ImageGen::formatProgressText(const QString &status,
     }
     if (status == QStringLiteral("running"))
     {
-        return QStringLiteral("Drawing... %1%% (%2), about %3 s left")
+        return QStringLiteral("Drawing... %1% (%2), about %3 s left")
             .arg(static_cast<int>(percent))
             .arg(stage)
             .arg(estimateS);
@@ -552,7 +552,10 @@ void ImageGen::handlePollResponse(Job *job, QNetworkReply *reply)
                 .toString();
         const int queuePos =
             obj.value(QStringLiteral("queue_position")).toInt();
-        const int estimate = obj.value(QStringLiteral("estimate_s")).toInt();
+        // zimage-gw sends estimate_s with one decimal (e.g. 205.3); toInt() would
+        // give 0 for any value that is not a whole number, so round the double.
+        const int estimate =
+            qRound(obj.value(QStringLiteral("estimate_s")).toDouble());
         const QString text =
             formatProgressText(s, percent, stage, queuePos, estimate);
         emit progress(job->id, text);

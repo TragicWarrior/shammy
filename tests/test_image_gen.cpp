@@ -268,10 +268,8 @@ private slots:
         const QString s =
             ImageGen::formatProgressText(QStringLiteral("running"), 45.5, QStringLiteral("sampling"),
                                          0, 40);
-        QVERIFY(s.contains(QStringLiteral("Drawing")));
-        QVERIFY(s.contains(QStringLiteral("45%")));
-        QVERIFY(s.contains(QStringLiteral("sampling")));
-        QVERIFY(s.contains(QStringLiteral("40 s left")));
+        // The whole line, so a doubled "%%" (QString::arg has no escape) cannot slip by.
+        QCOMPARE(s, QStringLiteral("Drawing... 45% (sampling), about 40 s left"));
     }
 
     void toolResultText()
@@ -430,7 +428,8 @@ private slots:
                 QJsonObject{
                     {QStringLiteral("status"), QStringLiteral("running")},
                     {QStringLiteral("queue_position"), 0},
-                    {QStringLiteral("estimate_s"), 45},
+                    // Fractional, as zimage-gw sends it (round1), not a whole number.
+                    {QStringLiteral("estimate_s"), 45.3},
                     {QStringLiteral("progress"),
                      QJsonObject{{"stage", "sampling"}, {"percent", 35.0}}}}}
                 .toJson(QJsonDocument::Compact),
@@ -476,6 +475,18 @@ private slots:
 
         // Check that progress was emitted during polling.
         QVERIFY(progressSpy.size() >= 2); // at least queued + running progress
+        // The running poll shows the server's estimate, not 0 (toInt() gives 0 for 45.3).
+        bool sawRunning = false;
+        for (const QList<QVariant> &args : std::as_const(progressSpy))
+        {
+            const QString text = args.value(1).toString();
+            if (text.startsWith(QStringLiteral("Drawing")))
+            {
+                QCOMPARE(text, QStringLiteral("Drawing... 35% (sampling), about 45 s left"));
+                sawRunning = true;
+            }
+        }
+        QVERIFY(sawRunning);
 
         // Verify JSON metadata was written with server-provided width/height/seed.
         const QString jsonPath = savedPath.left(savedPath.size() - 4) + QStringLiteral(".json");
