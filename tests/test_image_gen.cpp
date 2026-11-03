@@ -255,6 +255,45 @@ private slots:
                     .toString() == QStringLiteral("string"));
     }
 
+    // Only zimage-people asks for the upscale; seed is sent only when set.
+    void submitBodyUpscalesPeopleOnly()
+    {
+        const QJsonObject people = ImageGen::submitBody(QStringLiteral("zimage-people"),
+                                                        QStringLiteral("a portrait"),
+                                                        QStringLiteral("square"), 7);
+        QCOMPARE(people.value(QStringLiteral("upscale")).toBool(), true);
+        QCOMPARE(people.value(QStringLiteral("model")).toString(), QStringLiteral("zimage-people"));
+        QCOMPARE(people.value(QStringLiteral("size")).toString(), QStringLiteral("square"));
+        QCOMPARE(people.value(QStringLiteral("async")).toBool(), true);
+        QCOMPARE(people.value(QStringLiteral("seed")).toInteger(), 7);
+
+        // The other presets: no upscale key (zimage-gw rejects it for them).
+        const QStringList others{QStringLiteral("zimage-scene"), QStringLiteral("zimage-scene-draft"),
+                                 QStringLiteral("zimage-people-quick"), QStringLiteral("zimage-max")};
+        for (const QString &preset : others)
+        {
+            const QJsonObject b = ImageGen::submitBody(preset, QStringLiteral("x"),
+                                                       QStringLiteral("landscape"), -1);
+            QVERIFY2(!b.contains(QStringLiteral("upscale")), qPrintable(preset));
+            QVERIFY2(!b.contains(QStringLiteral("seed")), qPrintable(preset));
+        }
+    }
+
+    // The model is told which quality gives the largest image and which the most detail.
+    void toolDefinitionExplainsQuality()
+    {
+        const QJsonObject fn = ImageGen::toolDefinition().value(QStringLiteral("function")).toObject();
+        const QString quality = fn.value(QStringLiteral("parameters")).toObject()
+                                    .value(QStringLiteral("properties")).toObject()
+                                    .value(QStringLiteral("quality")).toObject()
+                                    .value(QStringLiteral("description")).toString();
+        QVERIFY(quality.contains(QStringLiteral("highest resolution")));
+        QVERIFY(quality.contains(QStringLiteral("2048")));
+        QVERIFY(quality.contains(QStringLiteral("1344")));
+        QVERIFY(quality.contains(QStringLiteral("highest or best quality")));
+        QVERIFY(fn.value(QStringLiteral("description")).toString().contains(QStringLiteral("never draw")));
+    }
+
     void progressTextQueued()
     {
         const QString s = ImageGen::formatProgressText(QStringLiteral("queued"), 0, {}, 3, 180);

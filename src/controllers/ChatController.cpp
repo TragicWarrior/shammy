@@ -74,6 +74,7 @@ When you produce a substantial standalone document, UI, diagram, or code file th
 ...content...
 </artifact>
 Common types: text/html, image/svg+xml, text/markdown, text/plain, text/x-python, text/javascript, text/css.
+An artifact is never a stand-in for a photo, picture or realistic image: call generate_image when it is listed, and when it is not, say that image generation is not available.
 
 For interactive pages (dashboards, visualizations, tool results the user can click or filter), emit a complete HTML document as type text/html: <!DOCTYPE html>, utf-8, CSS and JS inside the artifact. CDN <script src> and <link> are fine — never web_fetch .js/.css libraries. Do not dump the page into the chat bubble; the desktop client renders the artifact in a side pane with JavaScript enabled.)";
 

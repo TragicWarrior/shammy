@@ -104,8 +104,13 @@ QJsonObject ImageGen::toolDefinition()
     qualityProp.insert(QStringLiteral("type"), QStringLiteral("string"));
     qualityProp.insert(
         QStringLiteral("description"),
-        QStringLiteral("Image quality: draft (fast preview), normal (standard), or max (highest "
-                       "detail). Takes several minutes."));
+        QStringLiteral("normal (the default): the largest image, 2048 pixels on the long side, "
+                       "in about 1 to 5 minutes. Use normal for \"largest\", \"biggest\" or "
+                       "\"highest resolution\". max: the most detail the model can draw, but a "
+                       "smaller image (1344 pixels on the long side) and about 10 minutes. Use "
+                       "max only when the user asks for the highest or best quality; "
+                       "\"photorealistic\" or \"detailed\" alone is not a reason for max. "
+                       "draft: a quick preview at a small size."));
     qualityProp.insert(QStringLiteral("default"), QStringLiteral("normal"));
     properties.insert(QStringLiteral("quality"), qualityProp);
 
@@ -123,9 +128,10 @@ QJsonObject ImageGen::toolDefinition()
     fn.insert(QStringLiteral("name"), QStringLiteral("generate_image"));
     fn.insert(
         QStringLiteral("description"),
-        QStringLiteral("Generate an image from a text prompt. Image generation takes several "
-                       "minutes. Use 'subject: people' for portraits of people. Use 'subject: "
-                       "scene' for places and things."));
+        QStringLiteral("Generate a picture (photo, painting or illustration) from a text "
+                       "prompt. Call this whenever the user asks for an image, photo or picture; "
+                       "never draw one as an SVG or HTML artifact instead. Use 'subject: people' "
+                       "for portraits of people. Use 'subject: scene' for places and things."));
     fn.insert(QStringLiteral("parameters"), params);
 
     return QJsonObject{
@@ -357,20 +363,33 @@ void ImageGen::testConnection(const QUrl &baseUrl)
             });
 }
 
+QJsonObject ImageGen::submitBody(const QString &preset, const QString &prompt,
+                                 const QString &aspect, qint64 seed)
+{
+    // Build the generation request; async so the job is polled.
+    QJsonObject body;
+    body.insert(QStringLiteral("model"), preset);
+    body.insert(QStringLiteral("prompt"), prompt);
+    body.insert(QStringLiteral("async"), true);
+    body.insert(QStringLiteral("size"), aspect);
+    if (seed >= 0)
+    {
+        body.insert(QStringLiteral("seed"), seed);
+    }
+    // People render at 1024 px; the upscale brings them to 2048 like scenes.
+    if (preset == QLatin1String("zimage-people"))
+    {
+        body.insert(QStringLiteral("upscale"), true);
+    }
+    return body;
+}
+
 void ImageGen::submit(Job *job)
 {
     // POST /v1/images/generations with async=true.
     // On success (202), sets up the poll timer.
     // On error, emits failed immediately.
-    QJsonObject body;
-    body.insert(QStringLiteral("model"), job->preset);
-    body.insert(QStringLiteral("prompt"), job->prompt);
-    body.insert(QStringLiteral("async"), true);
-    body.insert(QStringLiteral("size"), job->aspect);
-    if (job->seed >= 0)
-    {
-        body.insert(QStringLiteral("seed"), job->seed);
-    }
+    const QJsonObject body = submitBody(job->preset, job->prompt, job->aspect, job->seed);
 
     QNetworkRequest req(
         QUrl(trimTrailingSlash(job->baseUrl.toString()) + "/v1/images/generations"));

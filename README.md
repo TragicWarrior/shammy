@@ -205,13 +205,17 @@ When Settings → Image generation has a server URL and token, and **Tools** is
 on for a model, it can call `generate_image`. The server is zimage-gw, a plain
 HTTP service; every user shares one FIFO queue so a picture may wait its turn.
 
-| Subject / quality | Preset | Typical time |
-|---|---|---|
-| scene / draft | `zimage-scene-draft` | ~60 s |
-| scene / normal | `zimage-scene` | ~80 s |
-| people / draft | `zimage-people-quick` | ~160 s |
-| people / normal | `zimage-people` | ~260 s |
-| any / max | `zimage-max` | ~10 min |
+| Subject / quality | Preset | Long side | Typical time |
+|---|---|---|---|
+| scene / draft | `zimage-scene-draft` | 512 | ~60 s |
+| scene / normal | `zimage-scene` | 2048 (upscaled) | ~80 s |
+| people / draft | `zimage-people-quick` | 1024 | ~160 s |
+| people / normal | `zimage-people` | 2048 (upscaled) | ~5 min |
+| any / max | `zimage-max` | 1344 | ~10 min |
+
+`normal` is the default and gives the largest image, so "largest" or "highest
+resolution" asks for it. `max` draws the most detail at a smaller size, and
+is used only when the highest or best quality is asked for.
 
 The model passes `prompt`, `subject` (scene or people), `aspect`
 (square, landscape, portrait), `quality` (draft, normal, max) and an optional
