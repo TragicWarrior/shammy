@@ -34,6 +34,11 @@ public:
     // Map subject + quality to the server preset id.
     static QString presetFor(const QString &subject, const QString &quality);
 
+    // The POST /v1/images/generations body. zimage-people asks for the x4 upscale
+    // (Lanczos to 2048), so every normal-quality image is 2048 on the long side.
+    static QJsonObject submitBody(const QString &preset, const QString &prompt,
+                                  const QString &aspect, qint64 seed);
+
     // Map aspect keyword to WxH size string.
     static QString aspectFromSize(const QString &aspect);
 
