@@ -213,9 +213,9 @@ HTTP service; every user shares one FIFO queue so a picture may wait its turn.
 | people / normal | `zimage-people` | 2048 (upscaled) | ~5 min |
 | any / max | `zimage-max` | 1344 | ~10 min |
 
-`normal` is the default and gives the largest image, so "largest" or "highest
-resolution" asks for it. `max` draws the most detail at a smaller size, and
-is used only when the highest or best quality is asked for.
+`max` is the default: the most detail the model can draw, at about 1
+megapixel. Say "normal quality" for `normal` (a larger, upscaled image with
+less real detail, sooner), or "quickly" / "fast" for a `draft` preview.
 
 The model passes `prompt`, `subject` (scene or people), `aspect`
 (square, landscape, portrait), `quality` (draft, normal, max) and an optional

@@ -211,6 +211,11 @@ private slots:
                  QStringLiteral("zimage-max"));
         QCOMPARE(ImageGen::presetFor(QStringLiteral("people"), QStringLiteral("max")),
                  QStringLiteral("zimage-max"));
+        // No quality, or one the tool does not define, is max (the default).
+        QCOMPARE(ImageGen::presetFor(QStringLiteral("scene"), QString()),
+                 QStringLiteral("zimage-max"));
+        QCOMPARE(ImageGen::presetFor(QStringLiteral("people"), QStringLiteral("best")),
+                 QStringLiteral("zimage-max"));
     }
 
     void aspectMapping()
@@ -279,7 +284,7 @@ private slots:
         }
     }
 
-    // The model is told which quality gives the largest image and which the most detail.
+    // The model is told max is the default and which words step down to normal or draft.
     void toolDefinitionExplainsQuality()
     {
         const QJsonObject fn = ImageGen::toolDefinition().value(QStringLiteral("function")).toObject();
@@ -287,10 +292,15 @@ private slots:
                                     .value(QStringLiteral("properties")).toObject()
                                     .value(QStringLiteral("quality")).toObject()
                                     .value(QStringLiteral("description")).toString();
-        QVERIFY(quality.contains(QStringLiteral("highest resolution")));
-        QVERIFY(quality.contains(QStringLiteral("2048")));
-        QVERIFY(quality.contains(QStringLiteral("1344")));
-        QVERIFY(quality.contains(QStringLiteral("highest or best quality")));
+        QVERIFY(quality.startsWith(QStringLiteral("max (the default)")));
+        QVERIFY(quality.contains(QStringLiteral("\"normal quality\"")));
+        QVERIFY(quality.contains(QStringLiteral("\"fast\"")));
+        QVERIFY(quality.contains(QStringLiteral("\"quickly\"")));
+        QCOMPARE(fn.value(QStringLiteral("parameters")).toObject()
+                     .value(QStringLiteral("properties")).toObject()
+                     .value(QStringLiteral("quality")).toObject()
+                     .value(QStringLiteral("default")).toString(),
+                 QStringLiteral("max"));
         QVERIFY(fn.value(QStringLiteral("description")).toString().contains(QStringLiteral("never draw")));
     }
 

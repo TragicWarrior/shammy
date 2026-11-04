@@ -34,24 +34,19 @@ QString ImageGen::trimTrailingSlash(const QString &url)
 
 QString ImageGen::presetFor(const QString &subject, const QString &quality)
 {
-    // Map subject + quality to the zimage-gw preset.
-    if (quality == QStringLiteral("max"))
+    // Map subject + quality to the zimage-gw preset. Only "normal" and "draft"
+    // step down; anything else, including no quality at all, is max.
+    const bool people = subject == QLatin1String("people");
+    if (quality == QLatin1String("normal"))
     {
-        return QStringLiteral("zimage-max");
+        return people ? QStringLiteral("zimage-people") : QStringLiteral("zimage-scene");
     }
-    if (subject == QStringLiteral("people"))
+    if (quality == QLatin1String("draft"))
     {
-        if (quality == QStringLiteral("draft"))
-        {
-            return QStringLiteral("zimage-people-quick");
-        }
-        return QStringLiteral("zimage-people");
+        return people ? QStringLiteral("zimage-people-quick")
+                      : QStringLiteral("zimage-scene-draft");
     }
-    if (quality == QStringLiteral("draft"))
-    {
-        return QStringLiteral("zimage-scene-draft");
-    }
-    return QStringLiteral("zimage-scene");
+    return QStringLiteral("zimage-max");
 }
 
 QString ImageGen::aspectFromSize(const QString &aspect)
@@ -104,14 +99,15 @@ QJsonObject ImageGen::toolDefinition()
     qualityProp.insert(QStringLiteral("type"), QStringLiteral("string"));
     qualityProp.insert(
         QStringLiteral("description"),
-        QStringLiteral("normal (the default): the largest image, 2048 pixels on the long side, "
-                       "in about 1 to 5 minutes. Use normal for \"largest\", \"biggest\" or "
-                       "\"highest resolution\". max: the most detail the model can draw, but a "
-                       "smaller image (1344 pixels on the long side) and about 10 minutes. Use "
-                       "max only when the user asks for the highest or best quality; "
-                       "\"photorealistic\" or \"detailed\" alone is not a reason for max. "
-                       "draft: a quick preview at a small size."));
-    qualityProp.insert(QStringLiteral("default"), QStringLiteral("normal"));
+        QStringLiteral("max (the default): the most detail the model can draw, 1344 pixels on "
+                       "the long side (1024 square), in about 10 minutes. Use max unless the "
+                       "user asks for something faster. normal: only when the user says "
+                       "\"normal quality\"; a larger but less detailed image (2048 pixels, "
+                       "upscaled) in about 1 to 5 minutes. draft: only when the user says "
+                       "\"quickly\", \"quick\", \"fast\", \"draft\" or \"preview\"; a "
+                       "small preview in about a minute. When the user says one of these words, "
+                       "always pass quality (normal or draft): leaving it out gives max."));
+    qualityProp.insert(QStringLiteral("default"), QStringLiteral("max"));
     properties.insert(QStringLiteral("quality"), qualityProp);
 
     QJsonObject seedProp;
