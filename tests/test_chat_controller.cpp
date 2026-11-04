@@ -2971,6 +2971,17 @@ private slots:
         QCOMPARE(result.value(QStringLiteral("seed")).toLongLong(), 42LL);
         QCOMPARE(result.value(QStringLiteral("width")).toInt(), 1024);
         QCOMPARE(result.value(QStringLiteral("height")).toInt(), 1024);
+        QCOMPARE(result.value(QStringLiteral("jobId")).toString(), jobId);
+        // No upscaled field in the file: an older scene image still hides the buttons.
+        QCOMPARE(result.value(QStringLiteral("upscaled")).toBool(), true);
+
+        // A new sidecar says upscaled false, so the bubble shows the buttons.
+        meta.insert(QStringLiteral("upscaled"), false);
+        QVERIFY(jsonFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        jsonFile.write(QJsonDocument(meta).toJson(QJsonDocument::Compact));
+        jsonFile.close();
+        result = f.chat->imageForMessage(toolContent);
+        QCOMPARE(result.value(QStringLiteral("upscaled")).toBool(), false);
 
         // Clean up the test files.
         QFile::remove(pngPath);

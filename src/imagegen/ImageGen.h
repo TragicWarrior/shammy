@@ -31,11 +31,11 @@ public:
         QString dataDirectory;
     };
 
-    // Map subject + quality to the server preset id.
+    // Map subject + quality to the server preset id. "draft" is the same
+    // 8-step preset as "normal".
     static QString presetFor(const QString &subject, const QString &quality);
 
-    // The POST /v1/images/generations body. zimage-people asks for the x4 upscale
-    // (Lanczos to 2048), so every normal-quality image is 2048 on the long side.
+    // The POST /v1/images/generations body. No preset asks the server to upscale.
     static QJsonObject submitBody(const QString &preset, const QString &prompt,
                                   const QString &aspect, qint64 seed);
 
@@ -74,6 +74,26 @@ public:
     // Start the full job lifecycle: submit, poll, download, save.
     void start(const ImageJobSpec &spec);
 
+    struct UpscaleJobSpec
+    {
+        QUrl baseUrl;
+        QString token;
+        QString dataDirectory;
+        // The finished image to upscale. Its PNG and JSON stay on disk.
+        QString parentId;
+        int scale = 0;
+    };
+
+    // POST /v1/jobs/{id}/upscale body. async so the job is polled like a generation.
+    static QJsonObject upscaleBody(int scale);
+
+    // True when this image may still be upscaled. An explicit upscaled field
+    // wins. Older scene and people sidecars omit it and were already upscaled.
+    static bool offersUpscale(const QJsonObject &fields);
+
+    // Upscale a finished image by 2 or 4. Same poll, download and save path as start().
+    void upscale(const UpscaleJobSpec &spec);
+
     // Cancel the currently running job (sends DELETE).
     void cancel();
 
@@ -103,13 +123,24 @@ private:
         qint64 seed = -1;
         int width = 0;
         int height = 0;
+        // Set when this job is an upscale of a finished image. scale is 2 or 4.
+        bool upscale = false;
+        int scale = 0;
+        QString parentId;
         QTimer pollTimer;
         bool cancelled = false;
         int consecutiveFailures = 0;
         QPointer<QNetworkReply> reply;
     };
 
+    // Older scene and people sidecars omit upscaled and were already upscaled.
+    static bool presetAlreadyUpscaled(const QString &preset);
+    static bool readJsonFile(const QString &path, QJsonObject &fields);
+
     void submit(Job *job);
+    void postJob(Job *job, const QString &path, const QJsonObject &body);
+    // Record the new job on the original sidecar so a reopened chat shows it.
+    bool markParentReplaced(Job *job);
     void startPolling(Job *job);
     void doPoll(Job *job);
     void handlePollResponse(Job *job, QNetworkReply *reply);

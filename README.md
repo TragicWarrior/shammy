@@ -205,29 +205,37 @@ When Settings → Image generation has a server URL and token, and **Tools** is
 on for a model, it can call `generate_image`. The server is zimage-gw, a plain
 HTTP service; every user shares one FIFO queue so a picture may wait its turn.
 
-| Subject / quality | Preset | Long side | Typical time |
-|---|---|---|---|
-| scene / draft | `zimage-scene-draft` | 512 | ~60 s |
-| scene / normal | `zimage-scene` | 2048 (upscaled) | ~80 s |
-| people / draft | `zimage-people-quick` | 1024 | ~160 s |
-| people / normal | `zimage-people` | 2048 (upscaled) | ~5 min |
-| any / max | `zimage-max` | 1344 | ~10 min |
+Nothing is upscaled while it is generated. There are two levels. `subject`
+still picks scene or people; at normal those presets are the 768 floor.
+
+| Quality | Presets | Steps | Size | Typical time |
+|---|---|---|---|---|
+| normal | `zimage-scene`, `zimage-people` | 8 | 768², 1024×576 or 576×1024 | ~4½ min |
+| max | `zimage-max` | 8 | 1024², 1344×768 or 768×1344 | ~10 min |
 
 `max` is the default: the most detail the model can draw, at about 1
-megapixel. Say "normal quality" for `normal` (a larger, upscaled image with
-less real detail, sooner), or "quickly" / "fast" for a `draft` preview.
+megapixel. Say "normal quality", or "quickly" / "quick" / "fast" / "draft" /
+"preview", for normal (8 steps at the 768 floor, about 4 to 5 minutes).
+A `quality` of `draft` is accepted and means the same preset as `normal`.
 
 The model passes `prompt`, `subject` (scene or people), `aspect`
-(square, landscape, portrait), `quality` (draft, normal, max) and an optional
+(square, landscape, portrait), `quality` (`max` or `normal`) and an optional
 `seed`. The request goes through Shammy's own network connection; it is never
-parsed as the model's reply. While the server works, the conversation shows
-progress (stage, percentage, queue position). When the image is ready it is
-saved as a PNG under Shammy's data folder (`images/<job_id>.png`) alongside a
-short JSON metadata file. The model receives a brief tool-result text and
-never sees the image.
+parsed as the model's reply. Shammy does not send `upscale` on that request.
+While the server works, the conversation shows progress (stage, percentage,
+queue position). When the image is ready it is saved as a PNG under Shammy's
+data folder (`images/<job_id>.png`) alongside a short JSON metadata file. The
+model receives a brief tool-result text and never sees the image.
 
 The generated image appears in the chat with its prompt as a caption, and
-"Save as…" / "Copy" actions. **Stop** sends a cancel request to the server.
+"Save as…" / "Copy" actions. Every new image also offers "Upscale 2×" and
+"Upscale 4×", because none of them arrive upscaled. The upscaled PNG is saved
+beside the original, and the chat shows it in place of the original after the
+conversation is closed and opened again. While it runs, the conversation shows
+the same progress text as generation. **Stop** sends a cancel request to the
+server, including an upscale that is still running. An older scene or people
+image that has no `upscaled` field was upscaled by the server, so those
+buttons stay hidden.
 
 Click the image to open it in its own window. Moving the mouse shows a control
 bar at the top that fades out once the mouse rests: zoom out and in (`-`, `+`,

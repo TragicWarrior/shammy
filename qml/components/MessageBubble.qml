@@ -25,8 +25,15 @@ Item {
     readonly property bool waitingOnTools: !isUser && !isTool && !isCompact
         && !streaming && chat.streaming && chat.toolActivity.length > 0
         && toolCalls.length > 0
-    readonly property var generatedImage: isTool && content.length > 0 ? chat.imageForMessage(content) : ({})
+    // imageRevision changes when an upscale replaces the file this bubble shows.
+    readonly property var generatedImage: {
+        const rev = chat.imageRevision
+        return (rev >= 0 && root.isTool && root.content.length > 0)
+                ? chat.imageForMessage(root.content) : ({})
+    }
     readonly property bool hasImage: generatedImage.path !== undefined
+    readonly property bool upscalingThis: chat.imageUpscaleRunning
+        && chat.imageActivityJobId === root.generatedImage.jobId
     readonly property string waitCaption: {
         if (root.fetchingPage || (root.waitingOnTools && toolCalls.indexOf("web_fetch") !== -1))
             return "Fetching page…"
@@ -341,6 +348,17 @@ Item {
                     wrapMode: Text.Wrap
                 }
 
+                Text {
+                    // Same progress strings generation shows (queue, then Drawing…).
+                    width: parent.width
+                    visible: chat.imageActivityJobId === root.generatedImage.jobId
+                             && chat.imageActivity.length > 0
+                    text: chat.imageActivity
+                    color: Theme.muted
+                    font.pixelSize: 12
+                    wrapMode: Text.Wrap
+                }
+
                 Row {
                     spacing: 16
                     Text {
@@ -366,6 +384,28 @@ Item {
                                 statusText.visible = true
                                 statusTimer.start()
                             }
+                        }
+                    }
+                    Text {
+                        visible: root.generatedImage.upscaled !== true && !root.upscalingThis
+                        text: "Upscale 2×"
+                        color: Theme.muted
+                        font.pixelSize: 12
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: chat.upscaleImage(root.generatedImage.jobId, 2)
+                        }
+                    }
+                    Text {
+                        visible: root.generatedImage.upscaled !== true && !root.upscalingThis
+                        text: "Upscale 4×"
+                        color: Theme.muted
+                        font.pixelSize: 12
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: chat.upscaleImage(root.generatedImage.jobId, 4)
                         }
                     }
                     Text {

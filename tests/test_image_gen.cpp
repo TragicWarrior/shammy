@@ -55,6 +55,10 @@ public:
     // Captured POST body for the submit endpoint.
     QByteArray lastSubmitBody;
 
+    // Captured POST body for /v1/jobs/{id}/upscale.
+    QByteArray lastUpscaleBody;
+    QString lastUpscalePath;
+
 private:
     void accept()
     {
@@ -74,11 +78,19 @@ private:
         if (end < 0)
             return;
         const QList<QByteArray> parts = buf.left(buf.indexOf("\r\n")).split(' ');
-        // Capture the POST body for the submit endpoint before consuming.
-        if (parts.size() >= 2 && parts[0] == "POST" &&
-            parts[1] == "/v1/images/generations")
+        // Capture POST bodies before consuming the buffer.
+        if (parts.size() >= 2 && parts[0] == "POST")
         {
-            lastSubmitBody = buf.mid(end + 4);
+            const QByteArray reqBody = buf.mid(end + 4);
+            if (parts[1] == "/v1/images/generations")
+            {
+                lastSubmitBody = reqBody;
+            }
+            if (parts[1].endsWith("/upscale"))
+            {
+                lastUpscaleBody = reqBody;
+                lastUpscalePath = QString::fromLatin1(parts[1]);
+            }
         }
         // Consume the entire request (headers + body) so the socket is ready for the response.
         m_buf.remove(s);
@@ -194,16 +206,14 @@ private slots:
 
     void presetMapping()
     {
-        // scene + draft -> zimage-scene-draft.
+        // scene + draft and scene + normal both use the 8-step scene preset.
         QCOMPARE(ImageGen::presetFor(QStringLiteral("scene"), QStringLiteral("draft")),
-                 QStringLiteral("zimage-scene-draft"));
-        // scene + normal -> zimage-scene.
+                 QStringLiteral("zimage-scene"));
         QCOMPARE(ImageGen::presetFor(QStringLiteral("scene"), QStringLiteral("normal")),
                  QStringLiteral("zimage-scene"));
-        // people + draft -> zimage-people-quick.
+        // people + draft and people + normal both use the 8-step people preset.
         QCOMPARE(ImageGen::presetFor(QStringLiteral("people"), QStringLiteral("draft")),
-                 QStringLiteral("zimage-people-quick"));
-        // people + normal -> zimage-people.
+                 QStringLiteral("zimage-people"));
         QCOMPARE(ImageGen::presetFor(QStringLiteral("people"), QStringLiteral("normal")),
                  QStringLiteral("zimage-people"));
         // any + max -> zimage-max.
@@ -260,48 +270,65 @@ private slots:
                     .toString() == QStringLiteral("string"));
     }
 
-    // Only zimage-people asks for the upscale; seed is sent only when set.
-    void submitBodyUpscalesPeopleOnly()
+    // No preset asks for an upscale. Seed is sent only when set.
+    void submitBodySendsNoUpscale()
     {
-        const QJsonObject people = ImageGen::submitBody(QStringLiteral("zimage-people"),
-                                                        QStringLiteral("a portrait"),
-                                                        QStringLiteral("square"), 7);
-        QCOMPARE(people.value(QStringLiteral("upscale")).toBool(), true);
-        QCOMPARE(people.value(QStringLiteral("model")).toString(), QStringLiteral("zimage-people"));
-        QCOMPARE(people.value(QStringLiteral("size")).toString(), QStringLiteral("square"));
-        QCOMPARE(people.value(QStringLiteral("async")).toBool(), true);
-        QCOMPARE(people.value(QStringLiteral("seed")).toInteger(), 7);
-
-        // The other presets: no upscale key (zimage-gw rejects it for them).
-        const QStringList others{QStringLiteral("zimage-scene"), QStringLiteral("zimage-scene-draft"),
-                                 QStringLiteral("zimage-people-quick"), QStringLiteral("zimage-max")};
-        for (const QString &preset : others)
+        // Every preset, including people: the body has no upscale field.
+        const QStringList presets{QStringLiteral("zimage-people"),
+                                  QStringLiteral("zimage-scene"),
+                                  QStringLiteral("zimage-max")};
+        for (const QString &preset : presets)
         {
-            const QJsonObject b = ImageGen::submitBody(preset, QStringLiteral("x"),
-                                                       QStringLiteral("landscape"), -1);
-            QVERIFY2(!b.contains(QStringLiteral("upscale")), qPrintable(preset));
-            QVERIFY2(!b.contains(QStringLiteral("seed")), qPrintable(preset));
+            const QJsonObject body = ImageGen::submitBody(preset, QStringLiteral("a portrait"),
+                                                          QStringLiteral("square"), 7);
+            QVERIFY2(!body.contains(QStringLiteral("upscale")), qPrintable(preset));
+            QCOMPARE(body.value(QStringLiteral("model")).toString(), preset);
+            QCOMPARE(body.value(QStringLiteral("size")).toString(), QStringLiteral("square"));
+            QVERIFY(body.value(QStringLiteral("async")).toBool());
+            QCOMPARE(body.value(QStringLiteral("seed")).toInteger(), 7);
         }
+
+        // A negative seed is omitted, and still no upscale field.
+        const QJsonObject noSeed = ImageGen::submitBody(QStringLiteral("zimage-scene"),
+                                                        QStringLiteral("x"),
+                                                        QStringLiteral("landscape"), -1);
+        QVERIFY(!noSeed.contains(QStringLiteral("upscale")));
+        QVERIFY(!noSeed.contains(QStringLiteral("seed")));
     }
 
-    // The model is told max is the default and which words step down to normal or draft.
+    // The model is told max is the default, and the old draft words mean normal.
     void toolDefinitionExplainsQuality()
     {
-        const QJsonObject fn = ImageGen::toolDefinition().value(QStringLiteral("function")).toObject();
-        const QString quality = fn.value(QStringLiteral("parameters")).toObject()
-                                    .value(QStringLiteral("properties")).toObject()
-                                    .value(QStringLiteral("quality")).toObject()
-                                    .value(QStringLiteral("description")).toString();
+        const QJsonObject fn = ImageGen::toolDefinition()
+                                    .value(QStringLiteral("function"))
+                                    .toObject();
+        const QJsonObject qualityObj = fn.value(QStringLiteral("parameters")).toObject()
+                                           .value(QStringLiteral("properties")).toObject()
+                                           .value(QStringLiteral("quality")).toObject();
+        const QString quality = qualityObj.value(QStringLiteral("description")).toString();
+        const QJsonArray qualityEnum = qualityObj.value(QStringLiteral("enum")).toArray();
+        QCOMPARE(qualityEnum.size(), 2);
+        QCOMPARE(qualityEnum.at(0).toString(), QStringLiteral("max"));
+        QCOMPARE(qualityEnum.at(1).toString(), QStringLiteral("normal"));
         QVERIFY(quality.startsWith(QStringLiteral("max (the default)")));
         QVERIFY(quality.contains(QStringLiteral("\"normal quality\"")));
+        QVERIFY(quality.contains(QStringLiteral("8 steps at 768")));
+        QVERIFY(quality.contains(QStringLiteral("about 4 to 5 minutes")));
+        QVERIFY(quality.contains(QStringLiteral("quality normal")));
+        QVERIFY(!quality.contains(QStringLiteral("4-step")));
+        QVERIFY(!quality.contains(QStringLiteral("4 steps")));
+        QVERIFY(!quality.contains(QStringLiteral("2048")));
+        QVERIFY(!quality.contains(QStringLiteral("upscaled")));
+        QVERIFY(!quality.contains(QStringLiteral("larger")));
         QVERIFY(quality.contains(QStringLiteral("\"fast\"")));
         QVERIFY(quality.contains(QStringLiteral("\"quickly\"")));
-        QCOMPARE(fn.value(QStringLiteral("parameters")).toObject()
-                     .value(QStringLiteral("properties")).toObject()
-                     .value(QStringLiteral("quality")).toObject()
-                     .value(QStringLiteral("default")).toString(),
-                 QStringLiteral("max"));
-        QVERIFY(fn.value(QStringLiteral("description")).toString().contains(QStringLiteral("never draw")));
+        QVERIFY(quality.contains(QStringLiteral("\"quick\"")));
+        QVERIFY(quality.contains(QStringLiteral("\"draft\"")));
+        QVERIFY(quality.contains(QStringLiteral("\"preview\"")));
+        QCOMPARE(qualityObj.value(QStringLiteral("default")).toString(), QStringLiteral("max"));
+        QVERIFY(fn.value(QStringLiteral("description"))
+                    .toString()
+                    .contains(QStringLiteral("never draw")));
     }
 
     void progressTextQueued()
@@ -552,6 +579,9 @@ private slots:
             QCOMPARE(meta.value(QStringLiteral("width")).toInt(), 2048);
             QCOMPARE(meta.value(QStringLiteral("height")).toInt(), 2048);
             QCOMPARE(meta.value(QStringLiteral("seed")).toInt(), 42);
+            // A new generation is not upscaled, so the buttons show.
+            QCOMPARE(meta.value(QStringLiteral("upscaled")).toBool(), false);
+            QVERIFY(ImageGen::offersUpscale(meta));
         }
 
         // Verify the PNG was actually saved.
@@ -912,6 +942,7 @@ private slots:
         QCOMPARE(body.value(QStringLiteral("model")).toString(),
                  QStringLiteral("zimage-scene"));
         QVERIFY(body.value(QStringLiteral("async")).toBool());
+        QVERIFY(!body.contains(QStringLiteral("upscale")));
     }
 
     void unknownPollStatusFails()
@@ -1003,6 +1034,237 @@ private slots:
         QCOMPARE(finishedSpy.size(), 0);
         QVERIFY(failedSpy[0][1].toString().contains("did not return a job id"));
         QCOMPARE(failedSpy[0][0].toString(), QString{});
+    }
+
+    void offersUpscaleHidesButtons()
+    {
+        // The bubble shows Upscale 2× / 4× only when this is false. No window.
+        QJsonObject scene;
+        scene.insert(QStringLiteral("preset"), QStringLiteral("zimage-scene"));
+        QVERIFY(!ImageGen::offersUpscale(scene));
+
+        QJsonObject people;
+        people.insert(QStringLiteral("preset"), QStringLiteral("zimage-people"));
+        QVERIFY(!ImageGen::offersUpscale(people));
+
+        QJsonObject maxImage;
+        maxImage.insert(QStringLiteral("preset"), QStringLiteral("zimage-max"));
+        maxImage.insert(QStringLiteral("upscaled"), false);
+        QVERIFY(ImageGen::offersUpscale(maxImage));
+
+        QJsonObject draft;
+        draft.insert(QStringLiteral("preset"), QStringLiteral("zimage-scene-draft"));
+        QVERIFY(ImageGen::offersUpscale(draft));
+
+        QJsonObject quick;
+        quick.insert(QStringLiteral("preset"), QStringLiteral("zimage-people-quick"));
+        QVERIFY(ImageGen::offersUpscale(quick));
+
+        // A new file writes upscaled false for every preset, so the buttons show.
+        const QStringList fresh{QStringLiteral("zimage-scene"),
+                                QStringLiteral("zimage-people"),
+                                QStringLiteral("zimage-scene-draft"),
+                                QStringLiteral("zimage-people-quick"),
+                                QStringLiteral("zimage-max")};
+        for (const QString &preset : fresh)
+        {
+            QJsonObject image;
+            image.insert(QStringLiteral("preset"), preset);
+            image.insert(QStringLiteral("upscaled"), false);
+            QVERIFY2(ImageGen::offersUpscale(image), qPrintable(preset));
+        }
+
+        // An upscale result, and any sidecar that already says it was upscaled.
+        QJsonObject child;
+        child.insert(QStringLiteral("parent"), QStringLiteral("j_20261104_120000_ab12"));
+        child.insert(QStringLiteral("scale"), 2);
+        QVERIFY(!ImageGen::offersUpscale(child));
+
+        QJsonObject marked;
+        marked.insert(QStringLiteral("preset"), QStringLiteral("zimage-max"));
+        marked.insert(QStringLiteral("upscaled"), true);
+        QVERIFY(!ImageGen::offersUpscale(marked));
+    }
+
+    void upscalePollAndSave()
+    {
+        // POST scale, poll, save a new PNG + JSON, keep the original, and
+        // make a later lookup of the original job id return the new image.
+        TestServer srv;
+        QVERIFY(srv.listen());
+
+        const QByteArray png = makeOnePixelPng();
+        srv.imageBytes = png;
+
+        const QString parentId = QStringLiteral("j_20261104_120000_ab12");
+        const QString childId = QStringLiteral("j_20261104_120100_cd34");
+        QTemporaryDir dataDir;
+        const QString imgDir = dataDir.path() + QStringLiteral("/images");
+        QVERIFY(QDir().mkpath(imgDir));
+        const QString parentPng = imgDir + QStringLiteral("/") + parentId + QStringLiteral(".png");
+        const QByteArray parentBytes("parent-png");
+        {
+            QFile pngFile(parentPng);
+            QVERIFY(pngFile.open(QIODevice::WriteOnly));
+            pngFile.write(parentBytes);
+        }
+        {
+            QJsonObject meta{
+                {QStringLiteral("job_id"), parentId},
+                {QStringLiteral("prompt"), QStringLiteral("a red boat")},
+                {QStringLiteral("preset"), QStringLiteral("zimage-max")},
+                {QStringLiteral("seed"), 7},
+                {QStringLiteral("width"), 1344},
+                {QStringLiteral("height"), 768},
+                {QStringLiteral("upscaled"), false},
+            };
+            QFile jsonFile(imgDir + QStringLiteral("/") + parentId + QStringLiteral(".json"));
+            QVERIFY(jsonFile.open(QIODevice::WriteOnly));
+            jsonFile.write(QJsonDocument(meta).toJson(QJsonDocument::Compact));
+        }
+
+        // Scale 4's body is the same shape; the request below sends 2.
+        const QJsonObject scale4 = ImageGen::upscaleBody(4);
+        QCOMPARE(scale4.value(QStringLiteral("scale")).toInt(), 4);
+        QVERIFY(scale4.value(QStringLiteral("async")).toBool());
+
+        {
+            QJsonObject jobObj{
+                {QStringLiteral("id"), childId},
+                {QStringLiteral("object"), QStringLiteral("zimage.job")},
+                {QStringLiteral("kind"), QStringLiteral("upscale")},
+                {QStringLiteral("status"), QStringLiteral("queued")},
+                {QStringLiteral("model"), QStringLiteral("zimage-max")},
+                {QStringLiteral("aspect"), QStringLiteral("landscape")},
+            };
+            const QString upPath =
+                QStringLiteral("/v1/jobs/") + parentId + QStringLiteral("/upscale");
+            srv.routes[upPath].status = 202;
+            srv.routes[upPath].body = QJsonDocument(jobObj).toJson(QJsonDocument::Compact);
+        }
+
+        const QString pollPath = QStringLiteral("/v1/jobs/") + childId;
+        srv.pollResponses[pollPath] = {
+            QJsonDocument{QJsonObject{
+                {QStringLiteral("status"), QStringLiteral("queued")},
+                {QStringLiteral("queue_position"), 1},
+                {QStringLiteral("estimate_s"), 90},
+                {QStringLiteral("progress"), QJsonObject{{"stage", "upscale"}, {"percent", 0.0}}},
+            }}.toJson(QJsonDocument::Compact),
+            QJsonDocument{QJsonObject{
+                {QStringLiteral("status"), QStringLiteral("running")},
+                {QStringLiteral("queue_position"), 0},
+                {QStringLiteral("estimate_s"), 40.4},
+                {QStringLiteral("progress"), QJsonObject{{"stage", "upscale"}, {"percent", 50.0}}},
+            }}.toJson(QJsonDocument::Compact),
+            QJsonDocument{QJsonObject{
+                {QStringLiteral("status"), QStringLiteral("succeeded")},
+                {QStringLiteral("result"), QJsonObject{
+                    {QStringLiteral("width"), 2688},
+                    {QStringLiteral("height"), 1536},
+                    {QStringLiteral("seed"), 7},
+                }},
+            }}.toJson(QJsonDocument::Compact),
+        };
+
+        ImageGen gen;
+        QSignalSpy finishedSpy(&gen, &ImageGen::finished);
+        QSignalSpy failedSpy(&gen, &ImageGen::failed);
+        QSignalSpy progressSpy(&gen, &ImageGen::progress);
+
+        ImageGen::UpscaleJobSpec spec;
+        spec.baseUrl = QUrl(srv.url(QStringLiteral("/")));
+        spec.token = QStringLiteral("test-token");
+        spec.dataDirectory = dataDir.path();
+        spec.parentId = parentId;
+        spec.scale = 2;
+        gen.upscale(spec);
+
+        QVERIFY(waitForSignal([&]() { return finishedSpy.size() > 0 || failedSpy.size() > 0; },
+                              20000));
+        QCOMPARE(failedSpy.size(), 0);
+        QCOMPARE(finishedSpy.size(), 1);
+
+        // The request asked for scale 2 on this parent.
+        const QString upPath = QStringLiteral("/v1/jobs/") + parentId + QStringLiteral("/upscale");
+        QCOMPARE(srv.lastUpscalePath, upPath);
+        QJsonParseError parseErr;
+        const QJsonObject sent = QJsonDocument::fromJson(srv.lastUpscaleBody, &parseErr).object();
+        QCOMPARE(parseErr.error, QJsonParseError::NoError);
+        QCOMPARE(sent.value(QStringLiteral("scale")).toInt(), 2);
+        QVERIFY(sent.value(QStringLiteral("async")).toBool());
+
+        // Progress uses the same text as generation.
+        bool sawRunning = false;
+        for (const QList<QVariant> &args : std::as_const(progressSpy))
+        {
+            const QString text = args.value(1).toString();
+            if (text.startsWith(QStringLiteral("Drawing")))
+            {
+                QCOMPARE(text, QStringLiteral("Drawing... 50% (upscale), about 40 s left"));
+                sawRunning = true;
+            }
+        }
+        QVERIFY(sawRunning);
+
+        // The original file is still the bytes we wrote.
+        {
+            QFile parentFile(parentPng);
+            QVERIFY(parentFile.open(QIODevice::ReadOnly));
+            QCOMPARE(parentFile.readAll(), parentBytes);
+        }
+
+        const QString childPng = imgDir + QStringLiteral("/") + childId + QStringLiteral(".png");
+        const QString childJson = imgDir + QStringLiteral("/") + childId + QStringLiteral(".json");
+        QVERIFY(QFile::exists(childPng));
+        QCOMPARE(finishedSpy[0][1].toString(), childPng);
+        {
+            QFile jsonFile(childJson);
+            QVERIFY(jsonFile.open(QIODevice::ReadOnly));
+            const QJsonObject meta =
+                QJsonDocument::fromJson(jsonFile.readAll(), &parseErr).object();
+            QCOMPARE(parseErr.error, QJsonParseError::NoError);
+            QCOMPARE(meta.value(QStringLiteral("job_id")).toString(), childId);
+            QCOMPARE(meta.value(QStringLiteral("parent")).toString(), parentId);
+            QCOMPARE(meta.value(QStringLiteral("scale")).toInt(), 2);
+            QCOMPARE(meta.value(QStringLiteral("upscaled")).toBool(), true);
+            QCOMPARE(meta.value(QStringLiteral("prompt")).toString(), QStringLiteral("a red boat"));
+            QCOMPARE(meta.value(QStringLiteral("preset")).toString(), QStringLiteral("zimage-max"));
+            QCOMPARE(meta.value(QStringLiteral("width")).toInt(), 2688);
+            QCOMPARE(meta.value(QStringLiteral("height")).toInt(), 1536);
+            QCOMPARE(meta.value(QStringLiteral("seed")).toInt(), 7);
+            QVERIFY(!ImageGen::offersUpscale(meta));
+        }
+        {
+            QFile pngFile(childPng);
+            QVERIFY(pngFile.open(QIODevice::ReadOnly));
+            QCOMPARE(pngFile.readAll(), png);
+        }
+
+        // The original sidecar points at the child and no longer offers upscale.
+        {
+            QFile jsonFile(imgDir + QStringLiteral("/") + parentId + QStringLiteral(".json"));
+            QVERIFY(jsonFile.open(QIODevice::ReadOnly));
+            const QJsonObject meta =
+                QJsonDocument::fromJson(jsonFile.readAll(), &parseErr).object();
+            QCOMPARE(meta.value(QStringLiteral("replaced_by")).toString(), childId);
+            QCOMPARE(meta.value(QStringLiteral("upscaled")).toBool(), true);
+            QCOMPARE(meta.value(QStringLiteral("prompt")).toString(), QStringLiteral("a red boat"));
+            QVERIFY(!ImageGen::offersUpscale(meta));
+        }
+
+        // Closing and reopening reads the tool text, which still names the parent.
+        QString foundJobId;
+        QString foundPath;
+        QJsonObject foundFields;
+        const QString toolContent = ImageGen::formatToolResult(
+            parentId, QStringLiteral("zimage-max"), 1344, 768, 7);
+        QVERIFY(ImageGen::imageForToolResult(toolContent, dataDir.path(), foundJobId, foundPath,
+                                              foundFields));
+        QCOMPARE(foundJobId, childId);
+        QCOMPARE(foundPath, childPng);
+        QCOMPARE(foundFields.value(QStringLiteral("scale")).toInt(), 2);
+        QVERIFY(!ImageGen::offersUpscale(foundFields));
     }
 };
 

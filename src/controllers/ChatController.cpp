@@ -262,6 +262,9 @@ QVariantMap ChatController::imageForMessage(const QString &toolContent) const
     out.insert(QStringLiteral("seed"), seed);
     out.insert(QStringLiteral("width"), fields.value(QStringLiteral("width")).toInt());
     out.insert(QStringLiteral("height"), fields.value(QStringLiteral("height")).toInt());
+    out.insert(QStringLiteral("jobId"), jobId);
+    // Hides Upscale 2× / 4× once the sidecar says the image is already upscaled.
+    out.insert(QStringLiteral("upscaled"), !ImageGen::offersUpscale(fields));
     return out;
 }
 
@@ -295,6 +298,85 @@ bool ChatController::copyImageToClipboard(const QString &path)
         cb->setImage(img);
     }
     return true;
+}
+
+void ChatController::showImageActivity(const QString &jobId, const QString &text, bool running)
+{
+    // One signal covers the progress line, which bubble it belongs to, and
+    // whether Stop should cancel the upscale.
+    if (m_imageActivityJobId == jobId && m_imageActivity == text
+        && m_imageUpscaleRunning == running)
+    {
+        return;
+    }
+    m_imageActivityJobId = jobId;
+    m_imageActivity = text;
+    m_imageUpscaleRunning = running;
+    emit imageActivityChanged();
+}
+
+void ChatController::upscaleImage(const QString &jobId, int scale)
+{
+    // The buttons only offer 2 and 4. Ignore anything else, and a second click.
+    if (jobId.isEmpty() || (scale != 2 && scale != 4))
+    {
+        return;
+    }
+    if (m_imageUpscaleRunning)
+    {
+        return;
+    }
+    if (!m_settings->imageGenReady())
+    {
+        showImageActivity(jobId, QStringLiteral("Image server is not configured."), false);
+        return;
+    }
+    // Drop the previous upscale's lambdas before wiring this one.
+    disconnect(m_imageUpscaleProgressConn);
+    disconnect(m_imageUpscaleFinishedConn);
+    disconnect(m_imageUpscaleFailedConn);
+    showImageActivity(jobId, QStringLiteral("Starting image generation…"), true);
+    m_imageUpscaleProgressConn = connect(
+        &m_imageUpscale, &ImageGen::progress, this,
+        [this, jobId](const QString &, const QString &text)
+        {
+            // Same progress strings generation shows in the conversation.
+            showImageActivity(jobId, text, true);
+        });
+    m_imageUpscaleFinishedConn = connect(
+        &m_imageUpscale, &ImageGen::finished, this,
+        [this](const QString &, const QString &)
+        {
+            disconnect(m_imageUpscaleProgressConn);
+            disconnect(m_imageUpscaleFinishedConn);
+            disconnect(m_imageUpscaleFailedConn);
+            showImageActivity({}, {}, false);
+            // The sidecar now points at the new file. Bubbles read it again.
+            ++m_imageRevision;
+            emit imageRevisionChanged();
+        });
+    m_imageUpscaleFailedConn = connect(
+        &m_imageUpscale, &ImageGen::failed, this,
+        [this, jobId](const QString &, const QString &error)
+        {
+            disconnect(m_imageUpscaleProgressConn);
+            disconnect(m_imageUpscaleFinishedConn);
+            disconnect(m_imageUpscaleFailedConn);
+            // Stop clears the line. Any other failure stays on this image.
+            if (error == QLatin1String("cancelled"))
+            {
+                showImageActivity({}, {}, false);
+                return;
+            }
+            showImageActivity(jobId, error, false);
+        });
+    ImageGen::UpscaleJobSpec spec;
+    spec.baseUrl = QUrl(m_settings->imageGenUrl());
+    spec.token = m_settings->imageGenToken();
+    spec.dataDirectory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    spec.parentId = jobId;
+    spec.scale = scale;
+    m_imageUpscale.upscale(spec);
 }
 
 void ChatController::setArtifactPaneOpen(bool v)
@@ -2317,6 +2399,12 @@ void ChatController::onFailed(const QString &err)
 
 void ChatController::stop()
 {
+    // An upscale is not part of a chat reply, so cancel it even when nothing
+    // is streaming. The failed handler clears the progress line.
+    if (m_imageUpscaleRunning)
+    {
+        m_imageUpscale.cancel();
+    }
     if (m_compacting)
     {
         m_client->abortComplete();
