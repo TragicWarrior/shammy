@@ -1,3 +1,22 @@
+shammy (0.15.1-1) unstable; urgency=medium
+
+  * Generated images are drawn at the gateway's max quality by default (about
+    1 megapixel, about 10 min). "normal quality", "quickly" or "fast" give
+    the 768-pixel, 8-step render (about 4 to 5 min) instead.
+  * Upscale 2x and Upscale 4x under each generated image ask zimage-gw for an
+    ESRGAN upscale. The upscale shows beneath the original, which is kept,
+    each with its own Save as..., Copy and viewer. Nothing upscales
+    automatically any more.
+  * Save as... offers a dated name (shammy-YYYY-MM-DD-HHMMSS.png), starts in
+    the home folder, then in the folder last saved to while Shammy runs.
+  * The chat no longer snaps back down while you scroll up past a tall image
+    or a streaming reply; sending a message or opening another chat returns
+    to the end.
+  * Unit tests are left out of the default build; build them with the
+    "tests" target before running ctest.
+
+ -- Bryan Christ <bryan.christ@gmail.com>  Fri, 06 Nov 2026 10:36:32 -0600
+
 shammy (0.15.0-1) unstable; urgency=medium
 
   * Image generation: with a zimage-gw server set in Settings -> Image
