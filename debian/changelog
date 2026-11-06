@@ -1,3 +1,11 @@
+shammy (0.15.2-1) unstable; urgency=medium
+
+  * Generated images use 10 sampling steps, matching zimage-gw: a blind
+    comparison found them visibly better. Normal quality now takes about
+    5 min and max about 12 min, and the image tool tells the model so.
+
+ -- Bryan Christ <bryan.christ@gmail.com>  Fri, 06 Nov 2026 15:21:31 -0600
+
 shammy (0.15.1-1) unstable; urgency=medium
 
   * Generated images are drawn at the gateway's max quality by default (about
