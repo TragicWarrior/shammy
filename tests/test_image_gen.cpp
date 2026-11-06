@@ -331,6 +331,13 @@ private slots:
                     .contains(QStringLiteral("never draw")));
     }
 
+    // The Save as dialog is offered a dated .png name.
+    void suggestedSaveNameIsDatedPng()
+    {
+        const QDateTime when(QDate(2026, 11, 4), QTime(14, 30, 12));
+        QCOMPARE(ImageGen::suggestedSaveName(when), QStringLiteral("shammy-2026-11-04-143012.png"));
+    }
+
     void progressTextQueued()
     {
         const QString s = ImageGen::formatProgressText(QStringLiteral("queued"), 0, {}, 3, 180);
@@ -1088,8 +1095,8 @@ private slots:
 
     void upscalePollAndSave()
     {
-        // POST scale, poll, save a new PNG + JSON, keep the original, and
-        // make a later lookup of the original job id return the new image.
+        // POST scale, poll, save a new PNG + JSON, and leave the original
+        // sidecar and pixels unchanged. A later lookup still returns it.
         TestServer srv;
         QVERIFY(srv.listen());
 
@@ -1241,19 +1248,20 @@ private slots:
             QCOMPARE(pngFile.readAll(), png);
         }
 
-        // The original sidecar points at the child and no longer offers upscale.
+        // The original sidecar is unchanged and still offers the other scale.
+        QJsonObject parentMeta;
         {
             QFile jsonFile(imgDir + QStringLiteral("/") + parentId + QStringLiteral(".json"));
             QVERIFY(jsonFile.open(QIODevice::ReadOnly));
-            const QJsonObject meta =
-                QJsonDocument::fromJson(jsonFile.readAll(), &parseErr).object();
-            QCOMPARE(meta.value(QStringLiteral("replaced_by")).toString(), childId);
-            QCOMPARE(meta.value(QStringLiteral("upscaled")).toBool(), true);
-            QCOMPARE(meta.value(QStringLiteral("prompt")).toString(), QStringLiteral("a red boat"));
-            QVERIFY(!ImageGen::offersUpscale(meta));
+            parentMeta = QJsonDocument::fromJson(jsonFile.readAll(), &parseErr).object();
+            QVERIFY(!parentMeta.contains(QStringLiteral("replaced_by")));
+            QCOMPARE(parentMeta.value(QStringLiteral("upscaled")).toBool(), false);
+            QCOMPARE(parentMeta.value(QStringLiteral("prompt")).toString(),
+                     QStringLiteral("a red boat"));
+            QVERIFY(ImageGen::offersUpscale(parentMeta));
         }
 
-        // Closing and reopening reads the tool text, which still names the parent.
+        // Closing and reopening still names the parent, and lists the child under it.
         QString foundJobId;
         QString foundPath;
         QJsonObject foundFields;
@@ -1261,10 +1269,243 @@ private slots:
             parentId, QStringLiteral("zimage-max"), 1344, 768, 7);
         QVERIFY(ImageGen::imageForToolResult(toolContent, dataDir.path(), foundJobId, foundPath,
                                               foundFields));
-        QCOMPARE(foundJobId, childId);
-        QCOMPARE(foundPath, childPng);
-        QCOMPARE(foundFields.value(QStringLiteral("scale")).toInt(), 2);
-        QVERIFY(!ImageGen::offersUpscale(foundFields));
+        QCOMPARE(foundJobId, parentId);
+        QCOMPARE(foundPath, parentPng);
+        QCOMPARE(foundFields.value(QStringLiteral("prompt")).toString(),
+                 QStringLiteral("a red boat"));
+        const QList<ImageGen::UpscaleImage> ups =
+            ImageGen::upscalesFor(dataDir.path(), parentId, parentMeta);
+        QCOMPARE(ups.size(), 1);
+        QCOMPARE(ups.at(0).jobId, childId);
+        QCOMPARE(ups.at(0).path, childPng);
+        QCOMPARE(ups.at(0).scale, 2);
+        QCOMPARE(ImageGen::offersScale(parentMeta, ups, 2), false);
+        QCOMPARE(ImageGen::offersScale(parentMeta, ups, 4), true);
+        QCOMPARE(ImageGen::offersScale(foundFields, ups, 2), false);
+    }
+
+    void upscalesStayBesideOriginal()
+    {
+        // Two saved upscales stay under the original, in scale order, and a
+        // second lookup (a reopen) finds the same list. Buttons hide per scale.
+        QTemporaryDir dataDir;
+        QVERIFY(dataDir.isValid());
+        const QString imgDir = dataDir.path() + QStringLiteral("/images");
+        QVERIFY(QDir().mkpath(imgDir));
+        const QString parentId = QStringLiteral("j_20261104_120000_aa01");
+        // Names sort the 4× file first, so the list order has to be by scale.
+        const QString id2 = QStringLiteral("j_20261104_120200_zz99");
+        const QString id4 = QStringLiteral("j_20261104_120100_aa00");
+        const QString otherId = QStringLiteral("j_20261104_120300_dd04");
+        const QByteArray parentBytes("parent-png");
+        const auto write = [&](const QString &jobId, const QJsonObject &meta,
+                                const QByteArray &png) -> bool
+        {
+            // Both files, or neither is usable. Failure is reported by the caller.
+            QFile pngFile(imgDir + QLatin1Char('/') + jobId + QStringLiteral(".png"));
+            if (!pngFile.open(QIODevice::WriteOnly))
+            {
+                return false;
+            }
+            pngFile.write(png);
+            QFile jsonFile(imgDir + QLatin1Char('/') + jobId + QStringLiteral(".json"));
+            if (!jsonFile.open(QIODevice::WriteOnly))
+            {
+                return false;
+            }
+            jsonFile.write(QJsonDocument(meta).toJson(QJsonDocument::Compact));
+            return true;
+        };
+        const QJsonObject parentMeta{
+            {QStringLiteral("job_id"), parentId},
+            {QStringLiteral("prompt"), QStringLiteral("a red boat")},
+            {QStringLiteral("preset"), QStringLiteral("zimage-max")},
+            {QStringLiteral("width"), 1024},
+            {QStringLiteral("height"), 1024},
+            {QStringLiteral("upscaled"), false},
+        };
+        QVERIFY(write(parentId, parentMeta, parentBytes));
+        const QJsonObject meta2{
+            {QStringLiteral("job_id"), id2},
+            {QStringLiteral("parent"), parentId},
+            {QStringLiteral("scale"), 2},
+            {QStringLiteral("prompt"), QStringLiteral("a red boat")},
+            {QStringLiteral("width"), 2048},
+            {QStringLiteral("height"), 2048},
+            {QStringLiteral("upscaled"), true},
+        };
+        const QJsonObject meta4{
+            {QStringLiteral("job_id"), id4},
+            {QStringLiteral("parent"), parentId},
+            {QStringLiteral("scale"), 4},
+            {QStringLiteral("prompt"), QStringLiteral("a red boat")},
+            {QStringLiteral("width"), 4096},
+            {QStringLiteral("height"), 4096},
+            {QStringLiteral("upscaled"), true},
+        };
+        const QJsonObject metaOther{
+            {QStringLiteral("job_id"), otherId},
+            {QStringLiteral("parent"), QStringLiteral("j_20261104_120000_eeee")},
+            {QStringLiteral("scale"), 2},
+            {QStringLiteral("width"), 100},
+            {QStringLiteral("height"), 100},
+        };
+        QVERIFY(write(id2, meta2, QByteArray("png-2")));
+        QVERIFY(write(id4, meta4, QByteArray("png-4")));
+        // A different parent, and a sidecar with no PNG, must not be listed.
+        QVERIFY(write(otherId, metaOther, QByteArray("other")));
+        {
+            QFile orphan(imgDir + QStringLiteral("/j_20261104_120400_ff05.json"));
+            QVERIFY(orphan.open(QIODevice::WriteOnly));
+            orphan.write(QJsonDocument(QJsonObject{
+                {QStringLiteral("parent"), parentId},
+                {QStringLiteral("scale"), 2},
+            }).toJson(QJsonDocument::Compact));
+        }
+
+        const QString toolContent = ImageGen::formatToolResult(
+            parentId, QStringLiteral("zimage-max"), 1024, 1024, 1);
+        const auto lookup = [&](QString &jobId, QString &path, QJsonObject &fields,
+                                 QList<ImageGen::UpscaleImage> &ups) -> bool
+        {
+            // The original comes back first; children are a separate list.
+            if (!ImageGen::imageForToolResult(toolContent, dataDir.path(), jobId, path,
+                                               fields))
+            {
+                return false;
+            }
+            ups = ImageGen::upscalesFor(dataDir.path(), jobId, fields);
+            return true;
+        };
+        QString jobId;
+        QString path;
+        QJsonObject fields;
+        QList<ImageGen::UpscaleImage> ups;
+        QVERIFY(lookup(jobId, path, fields, ups));
+        QCOMPARE(jobId, parentId);
+        QCOMPARE(path, imgDir + QLatin1Char('/') + parentId + QStringLiteral(".png"));
+        QCOMPARE(fields.value(QStringLiteral("upscaled")).toBool(), false);
+        QVERIFY(!fields.contains(QStringLiteral("replaced_by")));
+        QCOMPARE(ups.size(), 2);
+        QCOMPARE(ups.at(0).jobId, id2);
+        QCOMPARE(ups.at(0).scale, 2);
+        QCOMPARE(ups.at(0).width, 2048);
+        QCOMPARE(ImageGen::upscaleLabel(ups.at(0).scale, ups.at(0).width, ups.at(0).height),
+                 QStringLiteral("Upscaled 2× — 2048×2048"));
+        QCOMPARE(ups.at(1).jobId, id4);
+        QCOMPARE(ups.at(1).scale, 4);
+        QCOMPARE(ImageGen::upscaleLabel(ups.at(1).scale, ups.at(1).width, ups.at(1).height),
+                 QStringLiteral("Upscaled 4× — 4096×4096"));
+        QCOMPARE(ImageGen::offersScale(fields, ups, 2), false);
+        QCOMPARE(ImageGen::offersScale(fields, ups, 4), false);
+        // An upscale row offers neither button.
+        const QJsonObject childFields{
+            {QStringLiteral("parent"), parentId},
+            {QStringLiteral("scale"), 2},
+        };
+        QCOMPARE(ImageGen::offersScale(childFields, ups, 2), false);
+        QCOMPARE(ImageGen::offersScale(childFields, ups, 4), false);
+
+        // Reopen: a fresh lookup, with no process still holding the job.
+        QString againId;
+        QString againPath;
+        QJsonObject againFields;
+        QList<ImageGen::UpscaleImage> again;
+        QVERIFY(lookup(againId, againPath, againFields, again));
+        QCOMPARE(againId, parentId);
+        QCOMPARE(again.size(), 2);
+        QCOMPARE(again.at(0).jobId, id2);
+        QCOMPARE(again.at(1).jobId, id4);
+
+        {
+            QFile parentFile(imgDir + QLatin1Char('/') + parentId + QStringLiteral(".png"));
+            QVERIFY(parentFile.open(QIODevice::ReadOnly));
+            QCOMPARE(parentFile.readAll(), parentBytes);
+        }
+
+        // One scale saved hides that button and leaves the other.
+        QList<ImageGen::UpscaleImage> only2;
+        only2.append(ups.at(0));
+        QCOMPARE(ImageGen::offersScale(parentMeta, only2, 2), false);
+        QCOMPARE(ImageGen::offersScale(parentMeta, only2, 4), true);
+        QJsonObject scene;
+        scene.insert(QStringLiteral("preset"), QStringLiteral("zimage-scene"));
+        QCOMPARE(ImageGen::offersScale(scene, {}, 2), false);
+        QCOMPARE(ImageGen::offersScale(scene, {}, 4), false);
+        QJsonObject marked;
+        marked.insert(QStringLiteral("preset"), QStringLiteral("zimage-max"));
+        marked.insert(QStringLiteral("upscaled"), true);
+        QCOMPARE(ImageGen::offersScale(marked, {}, 2), false);
+        QCOMPARE(ImageGen::offersScale(marked, {}, 4), false);
+
+        // An older parent records replaced_by and has no parent field on the child.
+        QTemporaryDir oldDir;
+        QVERIFY(oldDir.isValid());
+        const QString oldImg = oldDir.path() + QStringLiteral("/images");
+        QVERIFY(QDir().mkpath(oldImg));
+        const QString oldParent = QStringLiteral("j_20261101_010101_ab12");
+        const QString oldChild = QStringLiteral("j_20261101_010102_cd34");
+        const QJsonObject oldParentMeta{
+            {QStringLiteral("job_id"), oldParent},
+            {QStringLiteral("preset"), QStringLiteral("zimage-max")},
+            {QStringLiteral("prompt"), QStringLiteral("old")},
+            {QStringLiteral("width"), 1024},
+            {QStringLiteral("height"), 1024},
+            {QStringLiteral("upscaled"), true},
+            {QStringLiteral("replaced_by"), oldChild},
+        };
+        {
+            QFile pngFile(oldImg + QLatin1Char('/') + oldParent + QStringLiteral(".png"));
+            QVERIFY(pngFile.open(QIODevice::WriteOnly));
+            pngFile.write("old-parent");
+            QFile jsonFile(oldImg + QLatin1Char('/') + oldParent + QStringLiteral(".json"));
+            QVERIFY(jsonFile.open(QIODevice::WriteOnly));
+            jsonFile.write(QJsonDocument(oldParentMeta).toJson(QJsonDocument::Compact));
+            QFile childPng(oldImg + QLatin1Char('/') + oldChild + QStringLiteral(".png"));
+            QVERIFY(childPng.open(QIODevice::WriteOnly));
+            childPng.write("old-child");
+            QFile childJson(oldImg + QLatin1Char('/') + oldChild + QStringLiteral(".json"));
+            QVERIFY(childJson.open(QIODevice::WriteOnly));
+            childJson.write(QJsonDocument(QJsonObject{
+                {QStringLiteral("job_id"), oldChild},
+                {QStringLiteral("scale"), 4},
+                {QStringLiteral("width"), 4096},
+                {QStringLiteral("height"), 4096},
+                {QStringLiteral("prompt"), QStringLiteral("old")},
+                {QStringLiteral("upscaled"), true},
+            }).toJson(QJsonDocument::Compact));
+        }
+        QString oldJob;
+        QString oldPath;
+        QJsonObject oldFields;
+        const QString oldTool = ImageGen::formatToolResult(
+            oldParent, QStringLiteral("zimage-max"), 1024, 1024, 1);
+        QVERIFY(ImageGen::imageForToolResult(oldTool, oldDir.path(), oldJob, oldPath, oldFields));
+        QCOMPARE(oldJob, oldParent);
+        QCOMPARE(oldPath, oldImg + QLatin1Char('/') + oldParent + QStringLiteral(".png"));
+        const QList<ImageGen::UpscaleImage> oldUps =
+            ImageGen::upscalesFor(oldDir.path(), oldParent, oldFields);
+        QCOMPARE(oldUps.size(), 1);
+        QCOMPARE(oldUps.at(0).jobId, oldChild);
+        QCOMPARE(oldUps.at(0).scale, 4);
+        QCOMPARE(ImageGen::offersScale(oldFields, oldUps, 2), true);
+        QCOMPARE(ImageGen::offersScale(oldFields, oldUps, 4), false);
+        // A child that also names its parent is not listed twice.
+        {
+            QFile childJson(oldImg + QLatin1Char('/') + oldChild + QStringLiteral(".json"));
+            QVERIFY(childJson.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            childJson.write(QJsonDocument(QJsonObject{
+                {QStringLiteral("job_id"), oldChild},
+                {QStringLiteral("parent"), oldParent},
+                {QStringLiteral("scale"), 4},
+                {QStringLiteral("width"), 4096},
+                {QStringLiteral("height"), 4096},
+            }).toJson(QJsonDocument::Compact));
+        }
+        const QList<ImageGen::UpscaleImage> once =
+            ImageGen::upscalesFor(oldDir.path(), oldParent, oldParentMeta);
+        QCOMPARE(once.size(), 1);
+        QCOMPARE(once.at(0).jobId, oldChild);
     }
 };
 

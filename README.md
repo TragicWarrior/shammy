@@ -229,13 +229,16 @@ model receives a brief tool-result text and never sees the image.
 
 The generated image appears in the chat with its prompt as a caption, and
 "Save as…" / "Copy" actions. Every new image also offers "Upscale 2×" and
-"Upscale 4×", because none of them arrive upscaled. The upscaled PNG is saved
-beside the original, and the chat shows it in place of the original after the
-conversation is closed and opened again. While it runs, the conversation shows
-the same progress text as generation. **Stop** sends a cancel request to the
-server, including an upscale that is still running. An older scene or people
-image that has no `upscaled` field was upscaled by the server, so those
-buttons stay hidden.
+"Upscale 4×", because none of them arrive upscaled. Each upscale is saved as
+its own PNG beside the original and shown under it, labelled with the factor
+and the pixel size, with its own Save as, Copy and viewer. The original stays.
+A button hides once that scale exists or is running; the upscale row has no
+upscale buttons. Closing and opening the conversation finds those rows from
+each sidecar's `parent` (an older `replaced_by` still shows both images).
+While it runs, the conversation shows the same progress text as generation.
+**Stop** sends a cancel request to the server, including an upscale that is
+still running. An older scene or people image that has no `upscaled` field
+was upscaled by the server, so those buttons stay hidden.
 
 Click the image to open it in its own window. Moving the mouse shows a control
 bar at the top that fades out once the mouse rests: zoom out and in (`-`, `+`,

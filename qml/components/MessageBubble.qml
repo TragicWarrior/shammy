@@ -25,7 +25,7 @@ Item {
     readonly property bool waitingOnTools: !isUser && !isTool && !isCompact
         && !streaming && chat.streaming && chat.toolActivity.length > 0
         && toolCalls.length > 0
-    // imageRevision changes when an upscale replaces the file this bubble shows.
+    // imageRevision changes when an upscale is saved, so this bubble lists it.
     readonly property var generatedImage: {
         const rev = chat.imageRevision
         return (rev >= 0 && root.isTool && root.content.length > 0)
@@ -301,6 +301,7 @@ Item {
             }
 
             Column {
+                id: imageColumn
                 visible: root.isTool && root.hasImage
                 width: parent.width
                 spacing: 6
@@ -368,7 +369,11 @@ Item {
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: saveAsDialog.open()
+                            onClicked: {
+                                // Start on a dated file name, not on a bare folder.
+                                saveAsDialog.selectedFile = chat.suggestedImageSaveUrl()
+                                saveAsDialog.open()
+                            }
                         }
                     }
                     Text {
@@ -387,7 +392,9 @@ Item {
                         }
                     }
                     Text {
-                        visible: root.generatedImage.upscaled !== true && !root.upscalingThis
+                        // Hide this factor once it is saved or currently running.
+                        visible: root.generatedImage.offerScale2 === true
+                            && !(root.upscalingThis && chat.imageUpscaleScale === 2)
                         text: "Upscale 2×"
                         color: Theme.muted
                         font.pixelSize: 12
@@ -398,7 +405,8 @@ Item {
                         }
                     }
                     Text {
-                        visible: root.generatedImage.upscaled !== true && !root.upscalingThis
+                        visible: root.generatedImage.offerScale4 === true
+                            && !(root.upscalingThis && chat.imageUpscaleScale === 4)
                         text: "Upscale 4×"
                         color: Theme.muted
                         font.pixelSize: 12
@@ -431,6 +439,115 @@ Item {
                         statusText.text = ok ? "Saved" : "Could not save"
                         statusText.visible = true
                         statusTimer.start()
+                    }
+                }
+
+                // Each upscale stays under the original. No upscale buttons here.
+                Repeater {
+                    model: root.generatedImage.upscales || []
+                    delegate: Column {
+                        id: upscaleRow
+                        required property var modelData
+                        width: imageColumn.width
+                        spacing: 6
+
+                        Text {
+                            width: parent.width
+                            text: upscaleRow.modelData.label
+                            color: Theme.muted
+                            font.pixelSize: 12
+                            wrapMode: Text.Wrap
+                        }
+                        Image {
+                            width: Math.min(parent.width, 640)
+                            height: upscaleRow.modelData.width > 0
+                                    ? Math.round(width * upscaleRow.modelData.height
+                                                 / upscaleRow.modelData.width)
+                                    : 0
+                            source: upscaleRow.modelData.url
+                            fillMode: Image.PreserveAspectFit
+                            asynchronous: true
+                            sourceSize.width: 1280
+                            anchors.horizontalCenter: parent.horizontalCenter
+
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    rowViewer.active = true
+                                    rowViewer.item.open()
+                                }
+                            }
+                        }
+                        Loader {
+                            id: rowViewer
+                            active: false
+                            sourceComponent: Component {
+                                ImageViewer {
+                                    path: upscaleRow.modelData.path
+                                    source: upscaleRow.modelData.url
+                                    prompt: upscaleRow.modelData.prompt
+                                    imageWidth: upscaleRow.modelData.width
+                                    imageHeight: upscaleRow.modelData.height
+                                }
+                            }
+                        }
+                        Row {
+                            spacing: 16
+                            Text {
+                                text: "Save as…"
+                                color: Theme.muted
+                                font.pixelSize: 12
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        // Same dated name the original Save as uses.
+                                        rowSave.selectedFile = chat.suggestedImageSaveUrl()
+                                        rowSave.open()
+                                    }
+                                }
+                            }
+                            Text {
+                                text: "Copy"
+                                color: Theme.muted
+                                font.pixelSize: 12
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        const ok = chat.copyImageToClipboard(
+                                            upscaleRow.modelData.path)
+                                        rowStatus.text = ok ? "Copied" : "Could not copy"
+                                        rowStatus.visible = true
+                                        rowStatusTimer.start()
+                                    }
+                                }
+                            }
+                            Text {
+                                id: rowStatus
+                                visible: false
+                                color: Theme.muted
+                                font.pixelSize: 12
+                            }
+                            Timer {
+                                id: rowStatusTimer
+                                interval: 2000
+                                onTriggered: rowStatus.visible = false
+                            }
+                        }
+                        FileDialog {
+                            id: rowSave
+                            fileMode: FileDialog.SaveFile
+                            defaultSuffix: "png"
+                            nameFilters: ["PNG image (*.png)"]
+                            onAccepted: {
+                                const ok = chat.saveImageAs(upscaleRow.modelData.path, selectedFile)
+                                rowStatus.text = ok ? "Saved" : "Could not save"
+                                rowStatus.visible = true
+                                rowStatusTimer.start()
+                            }
+                        }
                     }
                 }
             }

@@ -7,6 +7,8 @@
 #include <QSaveFile>
 #include <QTimer>
 
+#include <algorithm>
+
 namespace
 {
 
@@ -30,6 +32,12 @@ QString ImageGen::trimTrailingSlash(const QString &url)
         result.chop(1);
     }
     return result;
+}
+
+QString ImageGen::suggestedSaveName(const QDateTime &when)
+{
+    // A dated name, so the dialog starts on a file and not a bare folder.
+    return QStringLiteral("shammy-%1.png").arg(when.toString(QStringLiteral("yyyy-MM-dd-HHmmss")));
 }
 
 QString ImageGen::presetFor(const QString &subject, const QString &quality)
@@ -250,24 +258,141 @@ bool ImageGen::imageForToolResult(const QString &toolContent,
     {
         return false;
     }
-    // A finished upscale leaves the original file and names the new job here,
-    // so reopening the conversation shows the upscaled image.
-    const QString replaced = fields.value(QStringLiteral("replaced_by")).toString();
-    if (!replaced.isEmpty())
+    // replaced_by is not a substitute. The original stays, and upscalesFor
+    // lists the children under it.
+    return true;
+}
+
+QString ImageGen::upscaleLabel(int scale, int width, int height)
+{
+    // The line above an upscale, with the factor and the saved pixel size.
+    if (scale == 2 || scale == 4)
     {
-        const QString childPath =
-            dir + QStringLiteral("/") + replaced + QStringLiteral(".png");
-        const QString childJson =
-            childPath.left(childPath.size() - 4) + QStringLiteral(".json");
-        QJsonObject childFields;
-        if (QFile::exists(childPath) && readJsonFile(childJson, childFields))
+        return QStringLiteral("Upscaled %1× — %2×%3").arg(scale).arg(width).arg(height);
+    }
+    return QStringLiteral("Upscaled — %1×%2").arg(width).arg(height);
+}
+
+bool ImageGen::readUpscale(const QString &dir, const QString &jobId,
+                           const QJsonObject &fields, UpscaleImage &image)
+{
+    // A sidecar without its PNG is not an image the bubble can show.
+    const QString path = dir + QLatin1Char('/') + jobId + QStringLiteral(".png");
+    if (!QFile::exists(path))
+    {
+        return false;
+    }
+    image.jobId = jobId;
+    image.path = path;
+    image.prompt = fields.value(QStringLiteral("prompt")).toString();
+    image.scale = fields.value(QStringLiteral("scale")).toInt();
+    image.width = fields.value(QStringLiteral("width")).toInt();
+    image.height = fields.value(QStringLiteral("height")).toInt();
+    return true;
+}
+
+QList<ImageGen::UpscaleImage> ImageGen::upscalesFor(const QString &dataDirectory,
+                                                    const QString &parentId,
+                                                    const QJsonObject &parentFields)
+{
+    // Scan sidecars for parent, then an older replaced_by child that never
+    // wrote parent. The original file is left as it is.
+    QList<UpscaleImage> found;
+    if (parentId.isEmpty())
+    {
+        return found;
+    }
+    const QString dirPath = dataDirectory + QStringLiteral("/images");
+    const QDir dir(dirPath);
+    const QStringList names =
+        dir.entryList({QStringLiteral("*.json")}, QDir::Files, QDir::Name);
+    for (const QString &name : names)
+    {
+        QJsonObject fields;
+        if (!readJsonFile(dir.filePath(name), fields))
         {
-            path = childPath;
-            jobId = replaced;
-            fields = childFields;
+            continue;
+        }
+        if (fields.value(QStringLiteral("parent")).toString() != parentId)
+        {
+            continue;
+        }
+        // The file stem is the job id the PNG was saved under.
+        const QString jobId = name.left(name.size() - 5);
+        UpscaleImage image;
+        if (!readUpscale(dirPath, jobId, fields, image))
+        {
+            continue;
+        }
+        found.append(image);
+    }
+    const QString replaced = parentFields.value(QStringLiteral("replaced_by")).toString();
+    if (!replaced.isEmpty() && replaced != parentId)
+    {
+        // Skip a child the parent scan already recorded.
+        bool already = false;
+        for (const UpscaleImage &image : found)
+        {
+            if (image.jobId == replaced)
+            {
+                already = true;
+                break;
+            }
+        }
+        if (!already)
+        {
+            QJsonObject fields;
+            const QString jsonPath =
+                dirPath + QLatin1Char('/') + replaced + QStringLiteral(".json");
+            if (readJsonFile(jsonPath, fields))
+            {
+                UpscaleImage image;
+                if (readUpscale(dirPath, replaced, fields, image))
+                {
+                    found.append(image);
+                }
+            }
         }
     }
-    return true;
+    // Scale 2 before scale 4, then job id, so reopening shows the same order.
+    std::sort(found.begin(), found.end(), [](const UpscaleImage &a, const UpscaleImage &b)
+    {
+        if (a.scale != b.scale)
+        {
+            return a.scale < b.scale;
+        }
+        return a.jobId < b.jobId;
+    });
+    return found;
+}
+
+bool ImageGen::offersScale(const QJsonObject &fields,
+                           const QList<UpscaleImage> &upscales,
+                           int scale)
+{
+    // An upscale result is not given another pair of buttons.
+    if (!fields.value(QStringLiteral("parent")).toString().isEmpty())
+    {
+        return false;
+    }
+    for (const UpscaleImage &image : upscales)
+    {
+        // This factor is already saved, so its button stays hidden.
+        if (image.scale == scale)
+        {
+            return false;
+        }
+    }
+    if (offersUpscale(fields))
+    {
+        return true;
+    }
+    // An older build marked the parent upscaled and set replaced_by. The
+    // factor that was not produced can still be requested.
+    const bool marked = fields.value(QStringLiteral("upscaled")).toBool();
+    const bool linked = !fields.value(QStringLiteral("replaced_by")).toString().isEmpty()
+        || !upscales.isEmpty();
+    return marked && linked;
 }
 
 bool ImageGen::presetAlreadyUpscaled(const QString &preset)
@@ -782,7 +907,7 @@ void ImageGen::saveFiles(Job *job, const QByteArray &imageData, int width,
         fields.insert(QStringLiteral("scale"), job->scale);
     }
 
-    // Write both files atomically. The original PNG is left in place.
+    // Write both files atomically. The original PNG and JSON stay unchanged.
     if (!writeAtomic(jsonPath,
                      QJsonDocument(fields).toJson(QJsonDocument::Compact)) ||
         !writeAtomic(pngPath, imageData))
@@ -792,31 +917,10 @@ void ImageGen::saveFiles(Job *job, const QByteArray &imageData, int width,
         cleanupJob(job);
         return;
     }
-    if (job->upscale && !markParentReplaced(job))
-    {
-        emit failed(job->id, QStringLiteral("failed to record the upscaled image"));
-        cleanupJob(job);
-        return;
-    }
 
     // Emit finished with the PNG path.
     emit finished(job->id, pngPath);
     cleanupJob(job);
-}
-
-bool ImageGen::markParentReplaced(Job *job)
-{
-    // Point the original sidecar at the new file. The original PNG stays.
-    const QString jsonPath = job->dataDirectory + QStringLiteral("/images/")
-        + job->parentId + QStringLiteral(".json");
-    QJsonObject fields;
-    if (!readJsonFile(jsonPath, fields))
-    {
-        return false;
-    }
-    fields.insert(QStringLiteral("upscaled"), true);
-    fields.insert(QStringLiteral("replaced_by"), job->id);
-    return writeAtomic(jsonPath, QJsonDocument(fields).toJson(QJsonDocument::Compact));
 }
 
 bool ImageGen::writeAtomic(const QString &path, const QByteArray &data)

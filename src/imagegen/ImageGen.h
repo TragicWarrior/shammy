@@ -31,6 +31,9 @@ public:
         QString dataDirectory;
     };
 
+    // File name offered by the Save as dialog: shammy-YYYY-MM-DD-HHMMSS.png.
+    static QString suggestedSaveName(const QDateTime &when);
+
     // Map subject + quality to the server preset id. "draft" is the same
     // 8-step preset as "normal".
     static QString presetFor(const QString &subject, const QString &quality);
@@ -62,14 +65,42 @@ public:
     // Map a server error JSON body to a user-friendly error string.
     static QString mapError(const QJsonObject &errorBody);
 
-    // Given tool-content text and a data directory, find the PNG + JSON files
-    // that belong to the same job. Returns true if both files exist.
-    // The jobId, path and fields are filled in on success.
+    // Given tool-content text and a data directory, find the original PNG and
+    // JSON. An upscale does not replace that image. Returns true if both files
+    // exist. The jobId, path and fields are filled in on success.
     static bool imageForToolResult(const QString &toolContent,
                                    const QString &dataDirectory,
                                    QString &jobId,
                                    QString &path,
                                    QJsonObject &fields);
+
+    // One saved upscale shown under its original. scale is 2 or 4.
+    struct UpscaleImage
+    {
+        QString jobId;
+        QString path;
+        QString prompt;
+        int scale = 0;
+        int width = 0;
+        int height = 0;
+    };
+
+    // Caption for an upscale row, e.g. "Upscaled 2× — 2048×2048".
+    static QString upscaleLabel(int scale, int width, int height);
+
+    // Upscales of parentId, scale 2 then scale 4. A child's sidecar names the
+    // parent. An older replaced_by pointer is included when the child omitted
+    // parent. The original sidecar is not modified.
+    static QList<UpscaleImage> upscalesFor(const QString &dataDirectory,
+                                           const QString &parentId,
+                                           const QJsonObject &parentFields);
+
+    // True when the original may still offer this scale. A child of that
+    // scale hides the button. An upscale row, and an older scene or people
+    // file with no upscaled field, offers neither.
+    static bool offersScale(const QJsonObject &fields,
+                            const QList<UpscaleImage> &upscales,
+                            int scale);
 
     // Start the full job lifecycle: submit, poll, download, save.
     void start(const ImageJobSpec &spec);
@@ -136,11 +167,12 @@ private:
     // Older scene and people sidecars omit upscaled and were already upscaled.
     static bool presetAlreadyUpscaled(const QString &preset);
     static bool readJsonFile(const QString &path, QJsonObject &fields);
+    // Fill one upscale row when its PNG is on disk. False when the PNG is missing.
+    static bool readUpscale(const QString &dir, const QString &jobId,
+                            const QJsonObject &fields, UpscaleImage &image);
 
     void submit(Job *job);
     void postJob(Job *job, const QString &path, const QJsonObject &body);
-    // Record the new job on the original sidecar so a reopened chat shows it.
-    bool markParentReplaced(Job *job);
     void startPolling(Job *job);
     void doPoll(Job *job);
     void handlePollResponse(Job *job, QNetworkReply *reply);

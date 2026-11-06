@@ -2974,6 +2974,8 @@ private slots:
         QCOMPARE(result.value(QStringLiteral("jobId")).toString(), jobId);
         // No upscaled field in the file: an older scene image still hides the buttons.
         QCOMPARE(result.value(QStringLiteral("upscaled")).toBool(), true);
+        QCOMPARE(result.value(QStringLiteral("offerScale2")).toBool(), false);
+        QCOMPARE(result.value(QStringLiteral("offerScale4")).toBool(), false);
 
         // A new sidecar says upscaled false, so the bubble shows the buttons.
         meta.insert(QStringLiteral("upscaled"), false);
@@ -2982,6 +2984,9 @@ private slots:
         jsonFile.close();
         result = f.chat->imageForMessage(toolContent);
         QCOMPARE(result.value(QStringLiteral("upscaled")).toBool(), false);
+        QCOMPARE(result.value(QStringLiteral("offerScale2")).toBool(), true);
+        QCOMPARE(result.value(QStringLiteral("offerScale4")).toBool(), true);
+        QCOMPARE(result.value(QStringLiteral("upscales")).toList().size(), 0);
 
         // Clean up the test files.
         QFile::remove(pngPath);
@@ -3028,6 +3033,31 @@ private slots:
         QFile dstFile(dstPath);
         QVERIFY(dstFile.open(QIODevice::ReadOnly));
         QCOMPARE(dstFile.readAll(), makeOnePixelPng());
+    }
+
+    // Save as starts in the home folder, then in the folder last saved to.
+    void suggestedImageSaveUrlFollowsLastSave()
+    {
+        Fixture f(numbered);
+        QVERIFY(f.ok);
+        const QFileInfo first(f.chat->suggestedImageSaveUrl().toLocalFile());
+        QCOMPARE(first.absolutePath(), QDir::homePath());
+        QVERIFY(first.fileName().startsWith(QStringLiteral("shammy-")));
+        QVERIFY(first.fileName().endsWith(QStringLiteral(".png")));
+
+        QTemporaryDir tmpDir;
+        QVERIFY(tmpDir.isValid());
+        const QString srcPath = tmpDir.filePath(QStringLiteral("src.png"));
+        QFile srcFile(srcPath);
+        QVERIFY(srcFile.open(QIODevice::WriteOnly));
+        srcFile.write(makeOnePixelPng());
+        srcFile.close();
+        QVERIFY(QDir(tmpDir.path()).mkdir(QStringLiteral("out")));
+        const QString dest = tmpDir.filePath(QStringLiteral("out/picked.png"));
+        QVERIFY(f.chat->saveImageAs(srcPath, QUrl::fromLocalFile(dest)));
+
+        const QFileInfo next(f.chat->suggestedImageSaveUrl().toLocalFile());
+        QCOMPARE(next.absolutePath(), QFileInfo(dest).absolutePath());
     }
 
     void saveImageAsOverwritesExistingFile()

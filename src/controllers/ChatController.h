@@ -84,6 +84,7 @@ class ChatController : public QObject
     Q_PROPERTY(QString imageActivity READ imageActivity NOTIFY imageActivityChanged)
     Q_PROPERTY(QString imageActivityJobId READ imageActivityJobId NOTIFY imageActivityChanged)
     Q_PROPERTY(bool imageUpscaleRunning READ imageUpscaleRunning NOTIFY imageActivityChanged)
+    Q_PROPERTY(int imageUpscaleScale READ imageUpscaleScale NOTIFY imageActivityChanged)
     Q_PROPERTY(int imageRevision READ imageRevision NOTIFY imageRevisionChanged)
     Q_PROPERTY(int artifactsRevision READ artifactsRevision NOTIFY artifactsRevisionChanged)
 public:
@@ -151,6 +152,7 @@ public:
     QString imageActivity() const { return m_imageActivity; }
     QString imageActivityJobId() const { return m_imageActivityJobId; }
     bool imageUpscaleRunning() const { return m_imageUpscaleRunning; }
+    int imageUpscaleScale() const { return m_imageUpscaleScale; }
     int imageRevision() const { return m_imageRevision; }
 
     Q_INVOKABLE void newChat();
@@ -185,6 +187,9 @@ public:
     // Look up the image files for a tool message and return the PNG path, URL and metadata.
     Q_INVOKABLE QVariantMap imageForMessage(const QString &toolContent) const;
     // Copy the PNG file at `path` to `dest` (overwrite if it exists); false on failure.
+    // Where the image Save as dialog starts: a dated .png in the folder last
+    // saved to this run, else the home folder.
+    Q_INVOKABLE QUrl suggestedImageSaveUrl() const;
     Q_INVOKABLE bool saveImageAs(const QString &path, const QUrl &dest);
     // Load the PNG at `path` into the system clipboard as an image; false on failure.
     Q_INVOKABLE bool copyImageToClipboard(const QString &path);
@@ -376,7 +381,9 @@ private:
     QString m_imageActivity;
     QString m_imageActivityJobId;
     bool m_imageUpscaleRunning = false;
-    // Bumped when an upscale replaces the image a bubble is showing.
+    // 2 or 4 while that upscale runs, otherwise 0. Hides only that button.
+    int m_imageUpscaleScale = 0;
+    // Bumped when an upscale is saved, so the bubble lists it under the original.
     int m_imageRevision = 0;
     void showImageActivity(const QString &jobId, const QString &text, bool running);
     bool m_artifactPaneOpen = false;
@@ -395,6 +402,8 @@ private:
     // Set when an image has been shown in this generation to prevent
     // the final-write re-prompt from confusing the model after a caption.
     bool m_imageShown = false;
+    // Folder of the last image saved with Save as, for this run only (not stored).
+    QString m_lastImageSaveDir;
 
     QMap<int, AccTool> m_accTools;
     QSet<QString> m_toolFingerprints;
