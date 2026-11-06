@@ -33,7 +33,7 @@ ApplicationWindow {
     Shortcut {
         sequences: ["Esc"]
         onActivated: {
-            if (chat.streaming)
+            if (chat.streaming || chat.imageUpscaleRunning)
                 chat.stop()
             else if (settingsSheet.opened)
                 settingsSheet.close()

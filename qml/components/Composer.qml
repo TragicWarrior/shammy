@@ -487,7 +487,7 @@ Rectangle {
                 implicitHeight: 32
                 radius: 16
                 color: {
-                    if (chat.streaming || chat.compacting)
+                    if (chat.streaming || chat.compacting || chat.imageUpscaleRunning)
                         return Theme.sendBg
                     return (input.text.trim().length > 0 || chat.pendingAttachments.length > 0)
                            && !chat.attachmentsBusy
@@ -495,16 +495,16 @@ Rectangle {
                 }
                 Text {
                     anchors.centerIn: parent
-                    text: (chat.streaming || chat.compacting) ? "■" : "↑"
+                    text: (chat.streaming || chat.compacting || chat.imageUpscaleRunning) ? "■" : "↑"
                     color: Theme.sendFg
-                    font.pixelSize: (chat.streaming || chat.compacting) ? 10 : 16
+                    font.pixelSize: (chat.streaming || chat.compacting || chat.imageUpscaleRunning) ? 10 : 16
                     font.bold: true
                 }
                 MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
-                        if (chat.streaming || chat.compacting)
+                        if (chat.streaming || chat.compacting || chat.imageUpscaleRunning)
                             chat.stop()
                         else {
                             chat.composerText = input.text

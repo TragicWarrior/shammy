@@ -7,6 +7,8 @@
 #include <QSaveFile>
 #include <QTimer>
 
+#include <algorithm>
+
 namespace
 {
 
@@ -32,26 +34,22 @@ QString ImageGen::trimTrailingSlash(const QString &url)
     return result;
 }
 
+QString ImageGen::suggestedSaveName(const QDateTime &when)
+{
+    // A dated name, so the dialog starts on a file and not a bare folder.
+    return QStringLiteral("shammy-%1.png").arg(when.toString(QStringLiteral("yyyy-MM-dd-HHmmss")));
+}
+
 QString ImageGen::presetFor(const QString &subject, const QString &quality)
 {
-    // Map subject + quality to the zimage-gw preset.
-    if (quality == QStringLiteral("max"))
+    // Map subject + quality to the zimage-gw preset. "normal" and "draft"
+    // both use the 8-step floor. Anything else, including no quality, is max.
+    const bool people = subject == QLatin1String("people");
+    if (quality == QLatin1String("normal") || quality == QLatin1String("draft"))
     {
-        return QStringLiteral("zimage-max");
+        return people ? QStringLiteral("zimage-people") : QStringLiteral("zimage-scene");
     }
-    if (subject == QStringLiteral("people"))
-    {
-        if (quality == QStringLiteral("draft"))
-        {
-            return QStringLiteral("zimage-people-quick");
-        }
-        return QStringLiteral("zimage-people");
-    }
-    if (quality == QStringLiteral("draft"))
-    {
-        return QStringLiteral("zimage-scene-draft");
-    }
-    return QStringLiteral("zimage-scene");
+    return QStringLiteral("zimage-max");
 }
 
 QString ImageGen::aspectFromSize(const QString &aspect)
@@ -102,16 +100,20 @@ QJsonObject ImageGen::toolDefinition()
 
     QJsonObject qualityProp;
     qualityProp.insert(QStringLiteral("type"), QStringLiteral("string"));
+    // The tool offers max or normal. The words that used to mean a draft
+    // now ask for normal, which is the 8-step 768 floor.
+    qualityProp.insert(QStringLiteral("enum"),
+                       QJsonArray{QStringLiteral("max"), QStringLiteral("normal")});
     qualityProp.insert(
         QStringLiteral("description"),
-        QStringLiteral("normal (the default): the largest image, 2048 pixels on the long side, "
-                       "in about 1 to 5 minutes. Use normal for \"largest\", \"biggest\" or "
-                       "\"highest resolution\". max: the most detail the model can draw, but a "
-                       "smaller image (1344 pixels on the long side) and about 10 minutes. Use "
-                       "max only when the user asks for the highest or best quality; "
-                       "\"photorealistic\" or \"detailed\" alone is not a reason for max. "
-                       "draft: a quick preview at a small size."));
-    qualityProp.insert(QStringLiteral("default"), QStringLiteral("normal"));
+        QStringLiteral("max (the default): the most detail the model can draw, 1344 pixels on "
+                       "the long side (1024 square), in about 10 minutes. Use max unless the "
+                       "user asks for something faster. normal: when the user says "
+                       "\"normal quality\", \"quickly\", \"quick\", \"fast\", \"draft\" or "
+                       "\"preview\"; 8 steps at 768, about 4 to 5 minutes. When the user says "
+                       "one of these words, always pass quality normal: leaving it out "
+                       "gives max."));
+    qualityProp.insert(QStringLiteral("default"), QStringLiteral("max"));
     properties.insert(QStringLiteral("quality"), qualityProp);
 
     QJsonObject seedProp;
@@ -252,25 +254,196 @@ bool ImageGen::imageForToolResult(const QString &toolContent,
     const QString dir = dataDirectory + QStringLiteral("/images");
     path = dir + QStringLiteral("/") + jobId + QStringLiteral(".png");
     const QString jsonPath = path.left(path.size() - 4) + QStringLiteral(".json");
-    if (!QFile::exists(path) || !QFile::exists(jsonPath))
+    if (!QFile::exists(path) || !readJsonFile(jsonPath, fields))
     {
         return false;
     }
-    // Read the JSON metadata file to fill the fields map.
-    QFile jsonFile(jsonPath);
+    // replaced_by is not a substitute. The original stays, and upscalesFor
+    // lists the children under it.
+    return true;
+}
+
+QString ImageGen::upscaleLabel(int scale, int width, int height)
+{
+    // The line above an upscale, with the factor and the saved pixel size.
+    if (scale == 2 || scale == 4)
+    {
+        return QStringLiteral("Upscaled %1× — %2×%3").arg(scale).arg(width).arg(height);
+    }
+    return QStringLiteral("Upscaled — %1×%2").arg(width).arg(height);
+}
+
+bool ImageGen::readUpscale(const QString &dir, const QString &jobId,
+                           const QJsonObject &fields, UpscaleImage &image)
+{
+    // A sidecar without its PNG is not an image the bubble can show.
+    const QString path = dir + QLatin1Char('/') + jobId + QStringLiteral(".png");
+    if (!QFile::exists(path))
+    {
+        return false;
+    }
+    image.jobId = jobId;
+    image.path = path;
+    image.prompt = fields.value(QStringLiteral("prompt")).toString();
+    image.scale = fields.value(QStringLiteral("scale")).toInt();
+    image.width = fields.value(QStringLiteral("width")).toInt();
+    image.height = fields.value(QStringLiteral("height")).toInt();
+    return true;
+}
+
+QList<ImageGen::UpscaleImage> ImageGen::upscalesFor(const QString &dataDirectory,
+                                                    const QString &parentId,
+                                                    const QJsonObject &parentFields)
+{
+    // Scan sidecars for parent, then an older replaced_by child that never
+    // wrote parent. The original file is left as it is.
+    QList<UpscaleImage> found;
+    if (parentId.isEmpty())
+    {
+        return found;
+    }
+    const QString dirPath = dataDirectory + QStringLiteral("/images");
+    const QDir dir(dirPath);
+    const QStringList names =
+        dir.entryList({QStringLiteral("*.json")}, QDir::Files, QDir::Name);
+    for (const QString &name : names)
+    {
+        QJsonObject fields;
+        if (!readJsonFile(dir.filePath(name), fields))
+        {
+            continue;
+        }
+        if (fields.value(QStringLiteral("parent")).toString() != parentId)
+        {
+            continue;
+        }
+        // The file stem is the job id the PNG was saved under.
+        const QString jobId = name.left(name.size() - 5);
+        UpscaleImage image;
+        if (!readUpscale(dirPath, jobId, fields, image))
+        {
+            continue;
+        }
+        found.append(image);
+    }
+    const QString replaced = parentFields.value(QStringLiteral("replaced_by")).toString();
+    if (!replaced.isEmpty() && replaced != parentId)
+    {
+        // Skip a child the parent scan already recorded.
+        bool already = false;
+        for (const UpscaleImage &image : found)
+        {
+            if (image.jobId == replaced)
+            {
+                already = true;
+                break;
+            }
+        }
+        if (!already)
+        {
+            QJsonObject fields;
+            const QString jsonPath =
+                dirPath + QLatin1Char('/') + replaced + QStringLiteral(".json");
+            if (readJsonFile(jsonPath, fields))
+            {
+                UpscaleImage image;
+                if (readUpscale(dirPath, replaced, fields, image))
+                {
+                    found.append(image);
+                }
+            }
+        }
+    }
+    // Scale 2 before scale 4, then job id, so reopening shows the same order.
+    std::sort(found.begin(), found.end(), [](const UpscaleImage &a, const UpscaleImage &b)
+    {
+        if (a.scale != b.scale)
+        {
+            return a.scale < b.scale;
+        }
+        return a.jobId < b.jobId;
+    });
+    return found;
+}
+
+bool ImageGen::offersScale(const QJsonObject &fields,
+                           const QList<UpscaleImage> &upscales,
+                           int scale)
+{
+    // An upscale result is not given another pair of buttons.
+    if (!fields.value(QStringLiteral("parent")).toString().isEmpty())
+    {
+        return false;
+    }
+    for (const UpscaleImage &image : upscales)
+    {
+        // This factor is already saved, so its button stays hidden.
+        if (image.scale == scale)
+        {
+            return false;
+        }
+    }
+    if (offersUpscale(fields))
+    {
+        return true;
+    }
+    // An older build marked the parent upscaled and set replaced_by. The
+    // factor that was not produced can still be requested.
+    const bool marked = fields.value(QStringLiteral("upscaled")).toBool();
+    const bool linked = !fields.value(QStringLiteral("replaced_by")).toString().isEmpty()
+        || !upscales.isEmpty();
+    return marked && linked;
+}
+
+bool ImageGen::presetAlreadyUpscaled(const QString &preset)
+{
+    // Older sidecars omit upscaled. Those scene and people images were
+    // upscaled by the server, so the buttons stay hidden. New files write
+    // the field themselves and are not upscaled.
+    return preset == QLatin1String("zimage-scene")
+        || preset == QLatin1String("zimage-people");
+}
+
+bool ImageGen::offersUpscale(const QJsonObject &fields)
+{
+    // Trust the flag when the sidecar has one. Older files omit it.
+    if (fields.contains(QStringLiteral("upscaled")))
+    {
+        return !fields.value(QStringLiteral("upscaled")).toBool();
+    }
+    // An upscale result names its parent, so it is already the larger image.
+    if (!fields.value(QStringLiteral("parent")).toString().isEmpty())
+    {
+        return false;
+    }
+    return !presetAlreadyUpscaled(fields.value(QStringLiteral("preset")).toString());
+}
+
+bool ImageGen::readJsonFile(const QString &path, QJsonObject &fields)
+{
+    // Read one sidecar. False when the file is missing or not JSON.
+    QFile jsonFile(path);
     if (!jsonFile.open(QIODevice::ReadOnly))
     {
         return false;
     }
     QJsonParseError parseErr;
-    const QJsonDocument doc =
-        QJsonDocument::fromJson(jsonFile.readAll(), &parseErr);
+    const QJsonDocument doc = QJsonDocument::fromJson(jsonFile.readAll(), &parseErr);
     if (parseErr.error != QJsonParseError::NoError)
     {
         return false;
     }
     fields = doc.object();
     return true;
+}
+
+QJsonObject ImageGen::upscaleBody(int scale)
+{
+    // The server treats a missing scale as its old default. Always send 2 or 4.
+    QJsonObject body;
+    body.insert(QStringLiteral("async"), true);
+    body.insert(QStringLiteral("scale"), scale);
+    return body;
 }
 
 void ImageGen::start(const ImageJobSpec &spec)
@@ -296,6 +469,50 @@ void ImageGen::start(const ImageJobSpec &spec)
             { startPolling(job); });
     // Submit the job immediately; the callback will set up the poll timer.
     submit(job);
+}
+
+void ImageGen::upscale(const UpscaleJobSpec &spec)
+{
+    // Same single-job lifecycle as start(), aimed at a finished image.
+    if (spec.scale != 2 && spec.scale != 4)
+    {
+        emit failed({}, QStringLiteral("scale must be 2 or 4"));
+        return;
+    }
+    const QString dir = spec.dataDirectory + QStringLiteral("/images");
+    const QString parentPng =
+        dir + QStringLiteral("/") + spec.parentId + QStringLiteral(".png");
+    const QString parentJson =
+        parentPng.left(parentPng.size() - 4) + QStringLiteral(".json");
+    QJsonObject parentFields;
+    if (!QFile::exists(parentPng) || !readJsonFile(parentJson, parentFields))
+    {
+        emit failed(spec.parentId, QStringLiteral("no image to upscale"));
+        return;
+    }
+    // One request at a time. Dropping the previous one matches start().
+    if (m_currentJob)
+    {
+        cancel();
+    }
+    auto *job = new Job;
+    job->baseUrl = spec.baseUrl;
+    job->token = spec.token;
+    job->dataDirectory = spec.dataDirectory;
+    job->prompt = parentFields.value(QStringLiteral("prompt")).toString();
+    job->preset = parentFields.value(QStringLiteral("preset")).toString();
+    job->seed = parentFields.value(QStringLiteral("seed")).toInteger(-1);
+    job->upscale = true;
+    job->scale = spec.scale;
+    job->parentId = spec.parentId;
+    m_currentJob = job;
+    m_jobs.append(job);
+    // Connect the poll timer; use `this` as context since Job is not a QObject.
+    connect(&job->pollTimer, &QTimer::timeout, this, [this, job]()
+            { startPolling(job); });
+    const QString path =
+        QStringLiteral("/v1/jobs/") + spec.parentId + QStringLiteral("/upscale");
+    postJob(job, path, upscaleBody(spec.scale));
 }
 
 void ImageGen::cancel()
@@ -367,6 +584,7 @@ QJsonObject ImageGen::submitBody(const QString &preset, const QString &prompt,
                                  const QString &aspect, qint64 seed)
 {
     // Build the generation request; async so the job is polled.
+    // No preset asks the server to upscale. The buttons do that later.
     QJsonObject body;
     body.insert(QStringLiteral("model"), preset);
     body.insert(QStringLiteral("prompt"), prompt);
@@ -376,23 +594,21 @@ QJsonObject ImageGen::submitBody(const QString &preset, const QString &prompt,
     {
         body.insert(QStringLiteral("seed"), seed);
     }
-    // People render at 1024 px; the upscale brings them to 2048 like scenes.
-    if (preset == QLatin1String("zimage-people"))
-    {
-        body.insert(QStringLiteral("upscale"), true);
-    }
     return body;
 }
 
 void ImageGen::submit(Job *job)
 {
     // POST /v1/images/generations with async=true.
-    // On success (202), sets up the poll timer.
-    // On error, emits failed immediately.
     const QJsonObject body = submitBody(job->preset, job->prompt, job->aspect, job->seed);
+    postJob(job, QStringLiteral("/v1/images/generations"), body);
+}
 
-    QNetworkRequest req(
-        QUrl(trimTrailingSlash(job->baseUrl.toString()) + "/v1/images/generations"));
+void ImageGen::postJob(Job *job, const QString &path, const QJsonObject &body)
+{
+    // POST a generation or an upscale. On success (202), sets up the poll timer.
+    // On error, emits failed immediately.
+    QNetworkRequest req(QUrl(trimTrailingSlash(job->baseUrl.toString()) + path));
     req.setTransferTimeout(30000);
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     req.setRawHeader("Authorization", ("Bearer " + job->token).toUtf8());
@@ -432,8 +648,17 @@ void ImageGen::submit(Job *job)
                         cleanupJob(job);
                         return;
                     }
-                    job->preset = obj.value(QStringLiteral("model")).toString();
-                    job->aspect = obj.value(QStringLiteral("aspect")).toString();
+                    // Keep the parent preset when an upscale reply omits model.
+                    const QString model = obj.value(QStringLiteral("model")).toString();
+                    if (!model.isEmpty())
+                    {
+                        job->preset = model;
+                    }
+                    const QString aspect = obj.value(QStringLiteral("aspect")).toString();
+                    if (!aspect.isEmpty())
+                    {
+                        job->aspect = aspect;
+                    }
                     // Start polling after a short delay.
                     job->pollTimer.start(2000);
                 }
@@ -671,8 +896,18 @@ void ImageGen::saveFiles(Job *job, const QByteArray &imageData, int width,
     fields.insert(QStringLiteral("height"), height);
     fields.insert(QStringLiteral("created"),
                   QDateTime::currentDateTime().toString(Qt::ISODate));
+    // A generation is not upscaled. Only an upscale job sets the flag.
+    // Older files that omit it are handled in offersUpscale.
+    const bool upscaled = job->upscale;
+    fields.insert(QStringLiteral("upscaled"), upscaled);
+    if (job->upscale)
+    {
+        // The new file names the image it was made from and the factor asked for.
+        fields.insert(QStringLiteral("parent"), job->parentId);
+        fields.insert(QStringLiteral("scale"), job->scale);
+    }
 
-    // Write both files atomically.
+    // Write both files atomically. The original PNG and JSON stay unchanged.
     if (!writeAtomic(jsonPath,
                      QJsonDocument(fields).toJson(QJsonDocument::Compact)) ||
         !writeAtomic(pngPath, imageData))

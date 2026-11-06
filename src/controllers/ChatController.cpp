@@ -262,10 +262,46 @@ QVariantMap ChatController::imageForMessage(const QString &toolContent) const
     out.insert(QStringLiteral("seed"), seed);
     out.insert(QStringLiteral("width"), fields.value(QStringLiteral("width")).toInt());
     out.insert(QStringLiteral("height"), fields.value(QStringLiteral("height")).toInt());
+    out.insert(QStringLiteral("jobId"), jobId);
+    // Coarse flag kept for older callers. Each button uses offerScale2 / 4.
+    out.insert(QStringLiteral("upscaled"), !ImageGen::offersUpscale(fields));
+    const QList<ImageGen::UpscaleImage> upscales =
+        ImageGen::upscalesFor(dataDir, jobId, fields);
+    QVariantList rows;
+    for (const ImageGen::UpscaleImage &image : upscales)
+    {
+        // One row under the original, with its own file and caption.
+        QVariantMap row;
+        row.insert(QStringLiteral("path"), image.path);
+        row.insert(QStringLiteral("url"), QUrl::fromLocalFile(image.path).toString());
+        row.insert(QStringLiteral("prompt"), image.prompt);
+        row.insert(QStringLiteral("width"), image.width);
+        row.insert(QStringLiteral("height"), image.height);
+        row.insert(QStringLiteral("jobId"), image.jobId);
+        row.insert(QStringLiteral("scale"), image.scale);
+        row.insert(QStringLiteral("label"),
+                   ImageGen::upscaleLabel(image.scale, image.width, image.height));
+        rows.append(row);
+    }
+    out.insert(QStringLiteral("upscales"), rows);
+    out.insert(QStringLiteral("offerScale2"), ImageGen::offersScale(fields, upscales, 2));
+    out.insert(QStringLiteral("offerScale4"), ImageGen::offersScale(fields, upscales, 4));
     return out;
 }
 
 // Copy the PNG file at `path` to `dest` (overwrite if it exists); false on failure.
+QUrl ChatController::suggestedImageSaveUrl() const
+{
+    // The folder saved to last this run, while it still exists; else home.
+    QString dir = m_lastImageSaveDir;
+    if (dir.isEmpty() || !QDir(dir).exists())
+    {
+        dir = QDir::homePath();
+    }
+    return QUrl::fromLocalFile(dir + QLatin1Char('/')
+                               + ImageGen::suggestedSaveName(QDateTime::currentDateTime()));
+}
+
 bool ChatController::saveImageAs(const QString &path, const QUrl &dest)
 {
     const QString destPath = dest.toLocalFile();
@@ -278,7 +314,13 @@ bool ChatController::saveImageAs(const QString &path, const QUrl &dest)
     {
         return false;
     }
-    return QFile::copy(path, destPath);
+    if (!QFile::copy(path, destPath))
+    {
+        return false;
+    }
+    // Remember the folder so the next Save as starts there.
+    m_lastImageSaveDir = QFileInfo(destPath).absolutePath();
+    return true;
 }
 
 // Load the PNG at `path` into the system clipboard as an image; false on failure.
@@ -295,6 +337,91 @@ bool ChatController::copyImageToClipboard(const QString &path)
         cb->setImage(img);
     }
     return true;
+}
+
+void ChatController::showImageActivity(const QString &jobId, const QString &text, bool running)
+{
+    // One signal covers the progress line, which bubble it belongs to, and
+    // whether Stop should cancel the upscale.
+    if (m_imageActivityJobId == jobId && m_imageActivity == text
+        && m_imageUpscaleRunning == running)
+    {
+        return;
+    }
+    m_imageActivityJobId = jobId;
+    m_imageActivity = text;
+    m_imageUpscaleRunning = running;
+    emit imageActivityChanged();
+}
+
+void ChatController::upscaleImage(const QString &jobId, int scale)
+{
+    // The buttons only offer 2 and 4. Ignore anything else, and a second click.
+    if (jobId.isEmpty() || (scale != 2 && scale != 4))
+    {
+        return;
+    }
+    if (m_imageUpscaleRunning)
+    {
+        return;
+    }
+    if (!m_settings->imageGenReady())
+    {
+        showImageActivity(jobId, QStringLiteral("Image server is not configured."), false);
+        return;
+    }
+    // Drop the previous upscale's lambdas before wiring this one.
+    disconnect(m_imageUpscaleProgressConn);
+    disconnect(m_imageUpscaleFinishedConn);
+    disconnect(m_imageUpscaleFailedConn);
+    // Hide only this factor's button while the request runs.
+    m_imageUpscaleScale = scale;
+    showImageActivity(jobId, QStringLiteral("Starting image generation…"), true);
+    m_imageUpscaleProgressConn = connect(
+        &m_imageUpscale, &ImageGen::progress, this,
+        [this, jobId](const QString &, const QString &text)
+        {
+            // Same progress strings generation shows in the conversation.
+            showImageActivity(jobId, text, true);
+        });
+    m_imageUpscaleFinishedConn = connect(
+        &m_imageUpscale, &ImageGen::finished, this,
+        [this](const QString &, const QString &)
+        {
+            disconnect(m_imageUpscaleProgressConn);
+            disconnect(m_imageUpscaleFinishedConn);
+            disconnect(m_imageUpscaleFailedConn);
+            // List the new file before the running flag drops, so the button
+            // does not flash back on between the two updates.
+            ++m_imageRevision;
+            emit imageRevisionChanged();
+            m_imageUpscaleScale = 0;
+            showImageActivity({}, {}, false);
+        });
+    m_imageUpscaleFailedConn = connect(
+        &m_imageUpscale, &ImageGen::failed, this,
+        [this, jobId](const QString &, const QString &error)
+        {
+            disconnect(m_imageUpscaleProgressConn);
+            disconnect(m_imageUpscaleFinishedConn);
+            disconnect(m_imageUpscaleFailedConn);
+            // The scale was not saved, so its button comes back.
+            m_imageUpscaleScale = 0;
+            // Stop clears the line. Any other failure stays on this image.
+            if (error == QLatin1String("cancelled"))
+            {
+                showImageActivity({}, {}, false);
+                return;
+            }
+            showImageActivity(jobId, error, false);
+        });
+    ImageGen::UpscaleJobSpec spec;
+    spec.baseUrl = QUrl(m_settings->imageGenUrl());
+    spec.token = m_settings->imageGenToken();
+    spec.dataDirectory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    spec.parentId = jobId;
+    spec.scale = scale;
+    m_imageUpscale.upscale(spec);
 }
 
 void ChatController::setArtifactPaneOpen(bool v)
@@ -2317,6 +2444,12 @@ void ChatController::onFailed(const QString &err)
 
 void ChatController::stop()
 {
+    // An upscale is not part of a chat reply, so cancel it even when nothing
+    // is streaming. The failed handler clears the progress line.
+    if (m_imageUpscaleRunning)
+    {
+        m_imageUpscale.cancel();
+    }
     if (m_compacting)
     {
         m_client->abortComplete();
