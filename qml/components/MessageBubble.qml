@@ -16,13 +16,19 @@ Item {
     property bool isUser: role === "user"
     property bool isTool: role === "tool"
     property bool isCompact: role === "system"
+    // Live tool text belongs only to the assistant message running this round.
+    readonly property bool ownsToolActivity: chat.toolActivityMessageId.length > 0
+        && root.messageId === chat.toolActivityMessageId
     readonly property bool searchingWeb: !isUser && !isTool
+        && ownsToolActivity
         && chat.toolActivity.length > 0
         && toolCalls.indexOf("web_search") !== -1
     readonly property bool fetchingPage: !isUser && !isTool
+        && ownsToolActivity
         && chat.toolActivity.length > 0
         && toolCalls.indexOf("web_fetch") !== -1
     readonly property bool waitingOnTools: !isUser && !isTool && !isCompact
+        && ownsToolActivity
         && !streaming && chat.streaming && chat.toolActivity.length > 0
         && toolCalls.length > 0
     // imageRevision changes when an upscale is saved, so this bubble lists it.
