@@ -781,6 +781,8 @@ void ChatController::openConversation(const QString &id)
         m_messages.setMessages(m_genMessages);
         m_genMessages.clear();
         m_genAttached = true;
+        // Show the tool row again if this chat's tool round is still running.
+        publishToolActivityMessageId();
     }
     else
     {
@@ -1653,6 +1655,8 @@ void ChatController::detachGeneration()
     // Drop any transient tool-activity label so it doesn't linger on the chat
     // the user is switching to.
     setToolActivity({});
+    // The conversation on screen is not the one running this tool.
+    publishToolActivityMessageId();
 }
 
 void ChatController::endGeneration()
@@ -1681,6 +1685,8 @@ void ChatController::endGeneration()
     m_finalWriteAttempts = 0;
     m_imageShown = false;
     setToolActivity({});
+    // Stop, failure, and cancel end the tool row with the generation.
+    setGenToolMessageId({});
     // A permission prompt belongs to this generation; don't strand it open.
     if (m_permOpen)
     {
@@ -2383,9 +2389,13 @@ void ChatController::onFinished(const QString &reason)
         m_pendingToolQueue = runnable;
         m_pendingToolI = 0;
         ++m_toolRounds;
+        // The live tool row belongs to this assistant message until the round ends.
+        setGenToolMessageId(genLast().id);
         runPendingTools();
         return;
     }
+    // This reply is not running a tool, so no bubble shows the live row.
+    setGenToolMessageId({});
 
     const bool blank = genLast().content.trimmed().isEmpty()
         && genLast().toolCallsJson.isEmpty();
@@ -2502,6 +2512,26 @@ void ChatController::setToolActivity(const QString &s)
     emit toolActivityChanged();
 }
 
+void ChatController::setGenToolMessageId(const QString &id)
+{
+    // Remember the assistant message for this tool round, including while the
+    // user is looking at another chat.
+    m_genToolMessageId = id;
+    publishToolActivityMessageId();
+}
+
+void ChatController::publishToolActivityMessageId()
+{
+    // Only the chat that is generating shows the live tool row.
+    const QString shown = m_genAttached ? m_genToolMessageId : QString();
+    if (m_toolActivityMessageId == shown)
+    {
+        return;
+    }
+    m_toolActivityMessageId = shown;
+    emit toolActivityMessageIdChanged();
+}
+
 void ChatController::finishToolMessage(const QString &toolCallId, const QString &name, const QString &content)
 {
     // A tool call can resolve after its generation was stopped or superseded
@@ -2531,6 +2561,8 @@ void ChatController::runPendingTools()
 {
     if (m_pendingToolI >= m_pendingToolQueue.size())
     {
+        // The round is over. The follow-up reply is the model's, not a tool row.
+        setGenToolMessageId({});
         startGeneration();
         return;
     }

@@ -590,6 +590,8 @@ public:
 
     // Captured POST body for the submit endpoint.
     QByteArray lastSubmitBody;
+    // When set, each POST /v1/images/generations consumes the next body (202).
+    QList<QByteArray> submitResponses;
 
 private:
     void accept()
@@ -645,7 +647,14 @@ private:
         }
         ++hits[path];
         Route r;
-        if (routes.contains(path))
+        // One server can hand a different job id to each submit.
+        if (method == QLatin1String("POST") && path == QLatin1String("/v1/images/generations")
+            && !submitResponses.isEmpty())
+        {
+            r.status = 202;
+            r.body = submitResponses.takeFirst();
+        }
+        else if (routes.contains(path))
             r = routes.value(path);
 
         if (path.endsWith("/image") && !imageBytes.isEmpty() && r.body.isEmpty())
@@ -715,6 +724,78 @@ QString genImageArgs(const QString &prompt, const QString &subject = QStringLite
     if (seed >= 0)
         a.insert(QStringLiteral("seed"), seed);
     return QJsonDocument(a).toJson(QJsonDocument::Compact);
+}
+
+// 202 body for one async image job.
+QByteArray imageSubmitBody(const QString &jobId)
+{
+    const QJsonObject submitResp{
+        {QStringLiteral("id"), jobId},
+        {QStringLiteral("object"), QStringLiteral("zimage.job")},
+        {QStringLiteral("status"), QStringLiteral("queued")},
+        {QStringLiteral("model"), QStringLiteral("zimage-scene")},
+        {QStringLiteral("queue_position"), 0},
+        {QStringLiteral("estimate_s"), 0},
+    };
+    return QJsonDocument(submitResp).toJson(QJsonDocument::Compact);
+}
+
+// One poll body. A succeeded poll includes the result the client stores.
+QByteArray imagePollBody(const QString &status, int estimateS, double percent, const QString &stage)
+{
+    QJsonObject o{
+        {QStringLiteral("status"), status},
+        {QStringLiteral("queue_position"), 0},
+        {QStringLiteral("estimate_s"), estimateS},
+    };
+    if (status == QLatin1String("succeeded"))
+    {
+        o.insert(QStringLiteral("result"),
+                 QJsonObject{{QStringLiteral("width"), 1024},
+                             {QStringLiteral("height"), 1024},
+                             {QStringLiteral("seed"), 42},
+                             {QStringLiteral("preset"), QStringLiteral("zimage-scene")}});
+    }
+    else if (!stage.isEmpty())
+    {
+        o.insert(QStringLiteral("progress"),
+                 QJsonObject{{QStringLiteral("stage"), stage},
+                             {QStringLiteral("percent"), percent}});
+    }
+    return QJsonDocument(o).toJson(QJsonDocument::Compact);
+}
+
+// Point image generation at a local fake server and turn tools on.
+struct ImageGenReset
+{
+    SettingsController &s;
+    ~ImageGenReset()
+    {
+        s.setImageGenUrl({});
+        s.setImageGenToken({});
+        s.setModelTools(false);
+    }
+};
+
+void armImageGen(SettingsController &s, const FakeImageServer &srv)
+{
+    s.setImageGenUrl(srv.url(QStringLiteral("/")));
+    s.setImageGenToken(QStringLiteral("test-token"));
+    s.setModelTools(true);
+}
+
+// Last assistant whose stored tool calls contain `needle`.
+ChatMessage lastAssistantWithTool(const QVector<ChatMessage> &msgs, const QString &needle)
+{
+    ChatMessage found;
+    for (const ChatMessage &m : msgs)
+    {
+        if (m.role == QLatin1String("assistant") && m.toolCallsJson.contains(needle))
+        {
+            found = m;
+        }
+    }
+    return found;
 }
 } // namespace
 
@@ -3098,6 +3179,330 @@ private slots:
         Fixture f(numbered);
         QVERIFY(f.ok);
         QVERIFY(!f.chat->copyImageToClipboard(QStringLiteral("/nonexistent/path/img.png")));
+    }
+
+    // A later image job must not claim an older assistant message's tool row.
+    void secondImageJobOwnsOnlyItsOwnToolRow()
+    {
+        FakeImageServer imgSrv;
+        QVERIFY(imgSrv.listen());
+        imgSrv.imageBytes = makeOnePixelPng();
+        const QString job1 = QStringLiteral("j_20261106_000001_aaa1");
+        const QString job2 = QStringLiteral("j_20261106_000002_bbb2");
+        imgSrv.submitResponses << imageSubmitBody(job1) << imageSubmitBody(job2);
+        const QString poll1 = QStringLiteral("/v1/jobs/") + job1;
+        const QString poll2 = QStringLiteral("/v1/jobs/") + job2;
+        imgSrv.pollResponses[poll1] = {imagePollBody(QStringLiteral("succeeded"), 0, 0, {})};
+        imgSrv.pollResponses[poll2] = {
+            imagePollBody(QStringLiteral("running"), 838, 11.0, QStringLiteral("sampling")),
+            imagePollBody(QStringLiteral("succeeded"), 0, 0, {}),
+        };
+
+        Fixture f([](int i, const QJsonObject &)
+                  {
+                      if (i == 0)
+                      {
+                          return FakeOpenAi::toolCall(
+                              QStringLiteral("generate_image"),
+                              genImageArgs(QStringLiteral("a tabby kitten")));
+                      }
+                      if (i == 1)
+                      {
+                          return FakeOpenAi::text(QStringLiteral("Here is the kitten."));
+                      }
+                      if (i == 2)
+                      {
+                          return FakeOpenAi::toolCall(
+                              QStringLiteral("generate_image"),
+                              genImageArgs(QStringLiteral("the kitten with a ball of yarn")));
+                      }
+                      return FakeOpenAi::text(QStringLiteral("Here is the kitten with yarn."));
+                  });
+        QVERIFY(f.ok);
+        ImageGenReset reset{*f.settings};
+        armImageGen(*f.settings, imgSrv);
+
+        // An older turn already used web_search. Its row must stay inactive.
+        Conversation c;
+        c.id = newId();
+        c.title = QStringLiteral("kittens");
+        c.createdAt = c.updatedAt = nowMs();
+        f.store.upsertConversation(c);
+        const QString webTools = QStringLiteral(
+            "[{\"id\":\"call_w\",\"type\":\"function\",\"function\":{\"name\":\"web_search\","
+            "\"arguments\":\"{}\"}}]");
+        const QString webId = newId();
+        const auto add = [&](const QString &id, const QString &role, const QString &content,
+                             const QString &tools, qint64 at)
+        {
+            Message m;
+            m.id = id;
+            m.conversationId = c.id;
+            m.role = role;
+            m.content = content;
+            m.toolCallsJson = tools;
+            m.createdAt = at;
+            f.store.upsertMessage(m);
+        };
+        add(newId(), QStringLiteral("user"), QStringLiteral("search for a tabby kitten"), {}, 1);
+        add(webId, QStringLiteral("assistant"), QStringLiteral("Looking."), webTools, 2);
+        add(newId(), QStringLiteral("tool"), QStringLiteral("[web_search]\nresults"), {}, 3);
+        add(newId(), QStringLiteral("assistant"), QStringLiteral("I searched."), {}, 4);
+        f.chat->openConversation(c.id);
+
+        f.chat->setComposerText(QStringLiteral("draw a tabby kitten"));
+        f.chat->send();
+        QVERIFY(waitFor([&]() { return !f.chat->streaming(); }, 20000));
+        const ChatMessage first = lastAssistantWithTool(f.chat->messages()->all(),
+                                                        QStringLiteral("generate_image"));
+        QVERIFY(!first.id.isEmpty());
+        QVERIFY(first.id != webId);
+        QCOMPARE(f.chat->toolActivityMessageId(), QString());
+        QString firstTool;
+        for (const ChatMessage &m : f.chat->messages()->all())
+        {
+            if (m.role == QLatin1String("tool") && m.content.contains(job1))
+            {
+                firstTool = m.content;
+            }
+        }
+        QVERIFY(!firstTool.isEmpty());
+
+        f.chat->setComposerText(QStringLiteral("add a ball of yarn"));
+        f.chat->send();
+        const QString drawing = QStringLiteral("Drawing... 11% (sampling), about 838 s left");
+        QVERIFY(waitFor([&]() { return f.chat->toolActivity() == drawing; }, 20000));
+        const ChatMessage second = lastAssistantWithTool(f.chat->messages()->all(),
+                                                         QStringLiteral("generate_image"));
+        QCOMPARE(f.chat->toolActivityMessageId(), second.id);
+        QVERIFY(second.id != first.id);
+        QVERIFY(second.id != webId);
+        // The second job does not rewrite the first message or the search turn.
+        for (const ChatMessage &m : f.chat->messages()->all())
+        {
+            if (m.id == first.id)
+            {
+                QCOMPARE(m.content, first.content);
+                QCOMPARE(m.toolCallsJson, first.toolCallsJson);
+            }
+            if (m.id == webId)
+            {
+                QCOMPARE(m.toolCallsJson, webTools);
+            }
+            if (m.role == QLatin1String("tool") && m.content.contains(job1))
+            {
+                QCOMPARE(m.content, firstTool);
+            }
+        }
+
+        // The id drops when the job's tool result is stored, before the caption ends.
+        QVERIFY(waitFor([&]()
+                        {
+                            if (!f.chat->toolActivityMessageId().isEmpty())
+                            {
+                                return false;
+                            }
+                            for (const ChatMessage &m : f.chat->messages()->all())
+                            {
+                                if (m.role == QLatin1String("tool") && m.content.contains(job2))
+                                {
+                                    return true;
+                                }
+                            }
+                            return false;
+                        },
+                        20000));
+        QVERIFY(waitFor([&]() { return !f.chat->streaming(); }, 20000));
+        QCOMPARE(f.chat->toolActivityMessageId(), QString());
+        QCOMPARE(f.chat->toolActivity(), QString());
+        const ChatMessage firstAfter = [&]()
+        {
+            for (const ChatMessage &m : f.chat->messages()->all())
+            {
+                if (m.id == first.id)
+                {
+                    return m;
+                }
+            }
+            return ChatMessage();
+        }();
+        QCOMPARE(firstAfter.content, first.content);
+        QCOMPARE(firstAfter.toolCallsJson, first.toolCallsJson);
+    }
+
+    void toolActivityMessageIdClearsWhenTheImageErrors()
+    {
+        FakeImageServer imgSrv;
+        QVERIFY(imgSrv.listen());
+        const QString jobId = QStringLiteral("j_20261106_000003_ccc3");
+        imgSrv.routes[QStringLiteral("/v1/images/generations")] =
+            FakeImageServer::Route{202, imageSubmitBody(jobId)};
+        const QByteArray failed = QJsonDocument(QJsonObject{
+            {QStringLiteral("status"), QStringLiteral("failed")},
+            {QStringLiteral("error"),
+             QJsonObject{{QStringLiteral("message"), QStringLiteral("render failed")}}},
+        }).toJson(QJsonDocument::Compact);
+        imgSrv.pollResponses[QStringLiteral("/v1/jobs/") + jobId] = {failed};
+
+        Fixture f([](int i, const QJsonObject &)
+                  {
+                      if (i == 0)
+                      {
+                          return FakeOpenAi::toolCall(QStringLiteral("generate_image"),
+                                                      genImageArgs(QStringLiteral("a kitten")));
+                      }
+                      return FakeOpenAi::text(QStringLiteral("The image failed."));
+                  });
+        QVERIFY(f.ok);
+        ImageGenReset reset{*f.settings};
+        armImageGen(*f.settings, imgSrv);
+        f.chat->newChat();
+        f.chat->setComposerText(QStringLiteral("draw"));
+        f.chat->send();
+        QVERIFY(waitFor([&]() { return !f.chat->toolActivityMessageId().isEmpty(); }, 20000));
+        QVERIFY(waitFor([&]()
+                        {
+                            if (!f.chat->toolActivityMessageId().isEmpty())
+                            {
+                                return false;
+                            }
+                            for (const ChatMessage &m : f.chat->messages()->all())
+                            {
+                                if (m.role == QLatin1String("tool")
+                                    && m.content.contains(QLatin1String("render failed")))
+                                {
+                                    return true;
+                                }
+                            }
+                            return false;
+                        },
+                        20000));
+        QVERIFY(waitFor([&]() { return !f.chat->streaming(); }, 20000));
+        QCOMPARE(f.chat->toolActivityMessageId(), QString());
+    }
+
+    void toolActivityMessageIdClearsWhenCancelled()
+    {
+        FakeImageServer imgSrv;
+        QVERIFY(imgSrv.listen());
+        const QString jobId = QStringLiteral("j_20261106_000004_ddd4");
+        imgSrv.routes[QStringLiteral("/v1/images/generations")] =
+            FakeImageServer::Route{202, imageSubmitBody(jobId)};
+        const QString pollPath = QStringLiteral("/v1/jobs/") + jobId;
+        const QByteArray running =
+            imagePollBody(QStringLiteral("running"), 471, 2.0, QStringLiteral("sampling"));
+        for (int i = 0; i < 20; ++i)
+        {
+            imgSrv.pollResponses[pollPath].append(running);
+        }
+
+        Fixture f([](int, const QJsonObject &)
+                  {
+                      return FakeOpenAi::toolCall(QStringLiteral("generate_image"),
+                                                  genImageArgs(QStringLiteral("a kitten")));
+                  });
+        QVERIFY(f.ok);
+        ImageGenReset reset{*f.settings};
+        armImageGen(*f.settings, imgSrv);
+        f.chat->newChat();
+        f.chat->setComposerText(QStringLiteral("draw"));
+        f.chat->send();
+        QVERIFY(waitFor([&]() { return !f.chat->toolActivityMessageId().isEmpty(); }, 20000));
+        QVERIFY(waitFor([&]() { return imgSrv.hits[pollPath] > 0; }, 20000));
+        f.chat->stop();
+        QCOMPARE(f.chat->toolActivityMessageId(), QString());
+        QCOMPARE(f.chat->toolActivity(), QString());
+        QVERIFY(!f.chat->streaming());
+        QVERIFY(waitFor([&]() { return imgSrv.deleteHits > 0; }, 20000));
+    }
+
+    void toolActivityMessageIdClearsOnChatSwitchAndReturnsWithThatChat()
+    {
+        FakeImageServer imgSrv;
+        QVERIFY(imgSrv.listen());
+        const QString jobId = QStringLiteral("j_20261106_000005_eee5");
+        imgSrv.routes[QStringLiteral("/v1/images/generations")] =
+            FakeImageServer::Route{202, imageSubmitBody(jobId)};
+        const QString pollPath = QStringLiteral("/v1/jobs/") + jobId;
+        const QByteArray running =
+            imagePollBody(QStringLiteral("running"), 471, 2.0, QStringLiteral("sampling"));
+        for (int i = 0; i < 20; ++i)
+        {
+            imgSrv.pollResponses[pollPath].append(running);
+        }
+
+        Fixture f([](int, const QJsonObject &)
+                  {
+                      return FakeOpenAi::toolCall(QStringLiteral("generate_image"),
+                                                  genImageArgs(QStringLiteral("a kitten")));
+                  });
+        QVERIFY(f.ok);
+        ImageGenReset reset{*f.settings};
+        armImageGen(*f.settings, imgSrv);
+
+        Conversation c;
+        c.id = newId();
+        c.title = QStringLiteral("search first");
+        c.createdAt = c.updatedAt = nowMs();
+        f.store.upsertConversation(c);
+        const QString webTools = QStringLiteral(
+            "[{\"id\":\"call_w\",\"type\":\"function\",\"function\":{\"name\":\"web_search\","
+            "\"arguments\":\"{}\"}}]");
+        const QString webId = newId();
+        Message older;
+        older.id = webId;
+        older.conversationId = c.id;
+        older.role = QStringLiteral("assistant");
+        older.content = QStringLiteral("I searched.");
+        older.toolCallsJson = webTools;
+        older.createdAt = 2;
+        Message ask;
+        ask.id = newId();
+        ask.conversationId = c.id;
+        ask.role = QStringLiteral("user");
+        ask.content = QStringLiteral("search");
+        ask.createdAt = 1;
+        f.store.upsertMessage(ask);
+        f.store.upsertMessage(older);
+        f.chat->openConversation(c.id);
+
+        f.chat->setComposerText(QStringLiteral("draw"));
+        f.chat->send();
+        QVERIFY(waitFor([&]() { return !f.chat->toolActivityMessageId().isEmpty(); }, 20000));
+        const QString active = f.chat->toolActivityMessageId();
+        const QString genId = f.chat->generatingConversationId();
+        QVERIFY(active != webId);
+        QCOMPARE(genId, c.id);
+
+        Conversation other;
+        other.id = newId();
+        other.title = QStringLiteral("elsewhere");
+        other.createdAt = other.updatedAt = nowMs();
+        f.store.upsertConversation(other);
+        Message stray;
+        stray.id = newId();
+        stray.conversationId = other.id;
+        stray.role = QStringLiteral("user");
+        stray.content = QStringLiteral("unrelated");
+        stray.createdAt = nowMs();
+        f.store.upsertMessage(stray);
+        f.chat->openConversation(other.id);
+        QCOMPARE(f.chat->conversationId(), other.id);
+        QCOMPARE(f.chat->toolActivityMessageId(), QString());
+        QCOMPARE(f.chat->toolActivity(), QString());
+        QVERIFY(!f.chat->streaming());
+        QCOMPARE(f.chat->generatingConversationId(), genId);
+        for (const ChatMessage &m : f.chat->messages()->all())
+        {
+            QVERIFY(m.id != active);
+        }
+
+        // Coming back shows the row on the same assistant message.
+        f.chat->openConversation(genId);
+        QCOMPARE(f.chat->toolActivityMessageId(), active);
+        QVERIFY(f.chat->streaming());
+        f.chat->stop();
+        QCOMPARE(f.chat->toolActivityMessageId(), QString());
     }
 };
 

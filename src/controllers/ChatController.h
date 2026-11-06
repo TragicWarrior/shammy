@@ -81,6 +81,10 @@ class ChatController : public QObject
     Q_PROPERTY(bool webSearch READ webSearch WRITE setWebSearch NOTIFY webSearchChanged)
     Q_PROPERTY(bool webSearchAvailable READ webSearchAvailable NOTIFY webSearchAvailableChanged)
     Q_PROPERTY(QString toolActivity READ toolActivity NOTIFY toolActivityChanged)
+    // Assistant message that owns the in-flight tool row. Empty when no tool
+    // is running, and while another conversation is on screen.
+    Q_PROPERTY(QString toolActivityMessageId READ toolActivityMessageId
+               NOTIFY toolActivityMessageIdChanged)
     Q_PROPERTY(QString imageActivity READ imageActivity NOTIFY imageActivityChanged)
     Q_PROPERTY(QString imageActivityJobId READ imageActivityJobId NOTIFY imageActivityChanged)
     Q_PROPERTY(bool imageUpscaleRunning READ imageUpscaleRunning NOTIFY imageActivityChanged)
@@ -149,6 +153,7 @@ public:
     void setWebSearch(bool v);
     bool webSearchAvailable() const;
     QString toolActivity() const { return m_toolActivity; }
+    QString toolActivityMessageId() const { return m_toolActivityMessageId; }
     QString imageActivity() const { return m_imageActivity; }
     QString imageActivityJobId() const { return m_imageActivityJobId; }
     bool imageUpscaleRunning() const { return m_imageUpscaleRunning; }
@@ -226,6 +231,7 @@ signals:
     void webSearchChanged();
     void webSearchAvailableChanged();
     void toolActivityChanged();
+    void toolActivityMessageIdChanged();
     void imageActivityChanged();
     void imageRevisionChanged();
     void artifactsRevisionChanged();
@@ -277,6 +283,10 @@ private:
     void finishToolMessage(const QString &toolCallId, const QString &name, const QString &content);
     bool webSearchActive() const;
     void setToolActivity(const QString &s);
+    // Remember which assistant message owns the current tool round.
+    void setGenToolMessageId(const QString &id);
+    // Publish that id only while its chat is the one on screen.
+    void publishToolActivityMessageId();
     QJsonArray assembledToolCalls() const;
     Artifact currentArtifact() const;
     void syncCurrentArtifact();
@@ -380,6 +390,10 @@ private:
     QMetaObject::Connection m_imageUpscaleFinishedConn;
     QMetaObject::Connection m_imageUpscaleFailedConn;
     QString m_toolActivity;
+    // Shown to QML. Empty when this view is not the generating chat.
+    QString m_toolActivityMessageId;
+    // Kept across a chat switch so coming back can show the same bubble.
+    QString m_genToolMessageId;
     QString m_imageActivity;
     QString m_imageActivityJobId;
     bool m_imageUpscaleRunning = false;

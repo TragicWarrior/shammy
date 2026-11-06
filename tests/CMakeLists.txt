@@ -43,6 +43,16 @@ add_dependencies(tests test_image_viewer)
 # Opens real windows: keep them off the user's display.
 set_tests_properties(test_image_viewer PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(test_message_bubble test_message_bubble.cpp)
+target_link_libraries(test_message_bubble PRIVATE shammy_core Qt6::Test Qt6::Quick)
+target_include_directories(test_message_bubble PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_message_bubble PRIVATE
+    QML_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+add_test(NAME test_message_bubble COMMAND test_message_bubble)
+add_dependencies(tests test_message_bubble)
+# Loads MessageBubble off the user's display.
+set_tests_properties(test_message_bubble PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Controller-level tests: the controllers and list models live in the app target
 # (next to the QML module), so build the few they need directly into each test.
 set(CONTROLLER_TEST_SOURCES
