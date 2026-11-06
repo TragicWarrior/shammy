@@ -17,6 +17,10 @@ Item {
         footer: Item { height: 16; width: 1 }
 
         property bool stickToEnd: true
+        property real gestureStartY: 0
+        // Bumped when a gesture starts, so a follow queued before it does not run.
+        property int stickEpoch: 0
+        // Jump chips use a wide band. The pin does not.
         readonly property int endSlop: 96
 
         function atTop() {
@@ -25,15 +29,15 @@ Item {
             return contentY <= endSlop
         }
 
-        function atBottom() {
-            if (contentHeight <= height)
-                return true
-            return contentY + height >= contentHeight - endSlop
-        }
-
-        function followIfStuck() {
-            if (stickToEnd && !dragging && !flicking)
-                positionViewAtEnd()
+        function scheduleFollow() {
+            const epoch = stickEpoch
+            Qt.callLater(function() {
+                if (epoch !== list.stickEpoch)
+                    return
+                if (!list.stickToEnd || list.dragging || list.flicking || list.moving)
+                    return
+                list.positionViewAtEnd()
+            })
         }
 
         readonly property bool overflow: contentHeight > height + endSlop
@@ -59,13 +63,23 @@ Item {
             }
         }
 
-        onCountChanged: {
-            stickToEnd = true
-            Qt.callLater(followIfStuck)
+        // A new row follows the end only when the pin was already on.
+        onCountChanged: scheduleFollow()
+        onContentHeightChanged: scheduleFollow()
+        onMovementStarted: {
+            // Cancel a follow already queued, and remember where the gesture began.
+            stickEpoch++
+            stickToEnd = false
+            gestureStartY = contentY
         }
-        onContentHeightChanged: Qt.callLater(followIfStuck)
-        onMovementStarted: stickToEnd = false
-        onMovementEnded: stickToEnd = atBottom()
+        onMovementEnded: {
+            // Any upward movement stays where the user left it. Re-pin only
+            // when a gesture finishes on the end without having moved up.
+            const movedUp = contentY < gestureStartY - 0.5
+            stickToEnd = atYEnd && !movedUp
+            if (stickToEnd)
+                scheduleFollow()
+        }
         onDraggingChanged: {
             if (dragging)
                 stickToEnd = false
