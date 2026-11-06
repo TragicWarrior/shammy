@@ -1,8 +1,13 @@
+# Unit-test binaries. The default build does not compile them.
+# `cmake --build <dir> --target tests` (or `make tests`) does.
+add_custom_target(tests)
+
 function(shammy_test name)
     add_executable(${name} ${name}.cpp)
     target_link_libraries(${name} PRIVATE shammy_core Qt6::Test Qt6::Network Qt6::Sql)
     target_include_directories(${name} PRIVATE ${CMAKE_SOURCE_DIR}/src)
     add_test(NAME ${name} COMMAND ${name})
+    add_dependencies(tests ${name})
 endfunction()
 
 shammy_test(test_sseparser)
@@ -34,6 +39,7 @@ target_include_directories(test_image_viewer PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_definitions(test_image_viewer PRIVATE
     QML_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME test_image_viewer COMMAND test_image_viewer)
+add_dependencies(tests test_image_viewer)
 # Opens real windows: keep them off the user's display.
 set_tests_properties(test_image_viewer PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
@@ -61,6 +67,7 @@ function(shammy_controller_test name)
     target_link_libraries(${name} PRIVATE shammy_core Qt6::Test Qt6::Network Qt6::Sql)
     target_include_directories(${name} PRIVATE ${CMAKE_SOURCE_DIR}/src)
     add_test(NAME ${name} COMMAND ${name})
+    add_dependencies(tests ${name})
 endfunction()
 shammy_controller_test(test_chat_controller)
 shammy_controller_test(test_project_files)

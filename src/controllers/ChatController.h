@@ -204,6 +204,8 @@ public:
 signals:
     void streamingChanged();
     void conversationChanged();
+    // The user committed a composer message. The chat list pins to it.
+    void userMessageSent();
     void generatingConversationChanged();
     void errorBannerChanged();
     void composerTextChanged();

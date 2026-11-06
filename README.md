@@ -42,6 +42,7 @@ brew install cmake qt openssl@3 poppler
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug   # macOS: add -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix openssl@3)"
 cmake --build build -j
+cmake --build build --target tests -j
 ctest --test-dir build --output-on-failure
 ./build/linux/shammy                           # macOS: ./build/mac/shammy
 ```

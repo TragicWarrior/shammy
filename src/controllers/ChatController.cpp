@@ -1429,6 +1429,8 @@ bool ChatController::send()
     user.content = formatReplyPrompt(m_replyQuote, text) + extra;
     user.attachments = images;
     user.createdAt = nowMs();
+    // Pin before the row exists, so the list follows this message and the reply.
+    emit userMessageSent();
     m_messages.append(user);
 
     Message stored;

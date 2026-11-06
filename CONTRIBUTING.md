@@ -42,7 +42,7 @@ Layout is restrained: 12 / 18 / 26 corner radii, 1px hairlines, 12px muted capti
 
 ### Tests and hygiene
 
-- `cmake --build build -j && ctest --test-dir build --output-on-failure` should still pass.
+- `cmake --build build -j && cmake --build build --target tests -j && ctest --test-dir build --output-on-failure` should still pass.
 - Put logic that can be tested without the GUI in `src/` and add or extend a test under `tests/`.
 - Do not commit `build/`, editor junk, API keys, personal config, or sample data files (CSVs, exports, screenshots of your chats).
 - Keep the PR scoped. Unrelated refactors belong in their own branch.
