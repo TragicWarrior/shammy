@@ -206,12 +206,12 @@ private slots:
 
     void presetMapping()
     {
-        // scene + draft and scene + normal both use the 8-step scene preset.
+        // scene + draft and scene + normal both use the 10-step scene preset.
         QCOMPARE(ImageGen::presetFor(QStringLiteral("scene"), QStringLiteral("draft")),
                  QStringLiteral("zimage-scene"));
         QCOMPARE(ImageGen::presetFor(QStringLiteral("scene"), QStringLiteral("normal")),
                  QStringLiteral("zimage-scene"));
-        // people + draft and people + normal both use the 8-step people preset.
+        // people + draft and people + normal both use the 10-step people preset.
         QCOMPARE(ImageGen::presetFor(QStringLiteral("people"), QStringLiteral("draft")),
                  QStringLiteral("zimage-people"));
         QCOMPARE(ImageGen::presetFor(QStringLiteral("people"), QStringLiteral("normal")),
@@ -312,8 +312,9 @@ private slots:
         QCOMPARE(qualityEnum.at(1).toString(), QStringLiteral("normal"));
         QVERIFY(quality.startsWith(QStringLiteral("max (the default)")));
         QVERIFY(quality.contains(QStringLiteral("\"normal quality\"")));
-        QVERIFY(quality.contains(QStringLiteral("8 steps at 768")));
-        QVERIFY(quality.contains(QStringLiteral("about 4 to 5 minutes")));
+        QVERIFY(quality.contains(QStringLiteral("10 steps at 768")));
+        QVERIFY(quality.contains(QStringLiteral("about 5 minutes")));
+        QVERIFY(quality.contains(QStringLiteral("about 12 minutes")));
         QVERIFY(quality.contains(QStringLiteral("quality normal")));
         QVERIFY(!quality.contains(QStringLiteral("4-step")));
         QVERIFY(!quality.contains(QStringLiteral("4 steps")));

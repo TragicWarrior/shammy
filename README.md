@@ -211,12 +211,12 @@ still picks scene or people; at normal those presets are the 768 floor.
 
 | Quality | Presets | Steps | Size | Typical time |
 |---|---|---|---|---|
-| normal | `zimage-scene`, `zimage-people` | 8 | 768², 1024×576 or 576×1024 | ~4½ min |
-| max | `zimage-max` | 8 | 1024², 1344×768 or 768×1344 | ~10 min |
+| normal | `zimage-scene`, `zimage-people` | 10 | 768², 1024×576 or 576×1024 | ~5 min |
+| max | `zimage-max` | 10 | 1024², 1344×768 or 768×1344 | ~12 min |
 
 `max` is the default: the most detail the model can draw, at about 1
 megapixel. Say "normal quality", or "quickly" / "quick" / "fast" / "draft" /
-"preview", for normal (8 steps at the 768 floor, about 4 to 5 minutes).
+"preview", for normal (10 steps at the 768 floor, about 5 minutes).
 A `quality` of `draft` is accepted and means the same preset as `normal`.
 
 The model passes `prompt`, `subject` (scene or people), `aspect`

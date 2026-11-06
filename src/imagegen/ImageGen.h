@@ -35,7 +35,7 @@ public:
     static QString suggestedSaveName(const QDateTime &when);
 
     // Map subject + quality to the server preset id. "draft" is the same
-    // 8-step preset as "normal".
+    // 10-step preset as "normal".
     static QString presetFor(const QString &subject, const QString &quality);
 
     // The POST /v1/images/generations body. No preset asks the server to upscale.

@@ -43,7 +43,7 @@ QString ImageGen::suggestedSaveName(const QDateTime &when)
 QString ImageGen::presetFor(const QString &subject, const QString &quality)
 {
     // Map subject + quality to the zimage-gw preset. "normal" and "draft"
-    // both use the 8-step floor. Anything else, including no quality, is max.
+    // both use the 10-step floor. Anything else, including no quality, is max.
     const bool people = subject == QLatin1String("people");
     if (quality == QLatin1String("normal") || quality == QLatin1String("draft"))
     {
@@ -101,16 +101,16 @@ QJsonObject ImageGen::toolDefinition()
     QJsonObject qualityProp;
     qualityProp.insert(QStringLiteral("type"), QStringLiteral("string"));
     // The tool offers max or normal. The words that used to mean a draft
-    // now ask for normal, which is the 8-step 768 floor.
+    // now ask for normal, which is the 10-step 768 floor.
     qualityProp.insert(QStringLiteral("enum"),
                        QJsonArray{QStringLiteral("max"), QStringLiteral("normal")});
     qualityProp.insert(
         QStringLiteral("description"),
         QStringLiteral("max (the default): the most detail the model can draw, 1344 pixels on "
-                       "the long side (1024 square), in about 10 minutes. Use max unless the "
+                       "the long side (1024 square), in about 12 minutes. Use max unless the "
                        "user asks for something faster. normal: when the user says "
                        "\"normal quality\", \"quickly\", \"quick\", \"fast\", \"draft\" or "
-                       "\"preview\"; 8 steps at 768, about 4 to 5 minutes. When the user says "
+                       "\"preview\"; 10 steps at 768, about 5 minutes. When the user says "
                        "one of these words, always pass quality normal: leaving it out "
                        "gives max."));
     qualityProp.insert(QStringLiteral("default"), QStringLiteral("max"));
