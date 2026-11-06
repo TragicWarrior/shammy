@@ -244,5 +244,6 @@ endforeach()
 
 if(TARGET Qt6::Test)
     enable_testing()
-    add_subdirectory(tests)
+    # Not part of the default `all` target. Build with --target tests.
+    add_subdirectory(tests EXCLUDE_FROM_ALL)
 endif()

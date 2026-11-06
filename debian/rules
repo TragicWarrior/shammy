@@ -16,6 +16,11 @@ override_dh_auto_configure:
 	dh_auto_configure -- \
 		-DWITH_WEBENGINE=ON
 
+# Unit tests are not in the default target. Compile them before ctest runs.
+override_dh_auto_test:
+	dh_auto_build -- tests
+	dh_auto_test
+
 # Ubuntu 24.04 names some Qt libraries libqt6<x>6t64; later releases dropped the
 # suffix without a Provides, so a package that names only one spelling is
 # removed by a release upgrade (apt cannot satisfy it). Depend on either name.
