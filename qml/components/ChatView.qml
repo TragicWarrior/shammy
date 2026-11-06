@@ -19,7 +19,9 @@ Item {
         property bool stickToEnd: true
         property real gestureStartY: 0
         // Bumped when a gesture starts, so a follow queued before it does not run.
+        // A send or a conversation load bumps it too, which retires that gesture.
         property int stickEpoch: 0
+        property int gestureEpoch: 0
         // Jump chips use a wide band. The pin does not.
         readonly property int endSlop: 96
 
@@ -38,6 +40,14 @@ Item {
                     return
                 list.positionViewAtEnd()
             })
+        }
+
+        // Sending, or loading another conversation, shows the end again.
+        // An upward scroll during a reply does not call this.
+        function repin() {
+            stickEpoch++
+            stickToEnd = true
+            scheduleFollow()
         }
 
         readonly property bool overflow: contentHeight > height + endSlop
@@ -69,10 +79,14 @@ Item {
         onMovementStarted: {
             // Cancel a follow already queued, and remember where the gesture began.
             stickEpoch++
+            gestureEpoch = stickEpoch
             stickToEnd = false
             gestureStartY = contentY
         }
         onMovementEnded: {
+            // A send or a chat switch during the gesture already re-pinned.
+            if (gestureEpoch !== stickEpoch)
+                return
             // Any upward movement stays where the user left it. Re-pin only
             // when a gesture finishes on the end without having moved up.
             const movedUp = contentY < gestureStartY - 0.5
@@ -102,6 +116,15 @@ Item {
                 opacity: 0.35
             }
         }
+    }
+
+    Connections {
+        target: chat
+        function onUserMessageSent() { list.repin() }
+    }
+    Connections {
+        target: chat.messages
+        function onModelReset() { list.repin() }
     }
 
     Column {
