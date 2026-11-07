@@ -712,7 +712,9 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.right: parent.right
                 anchors.rightMargin: 8
-                visible: convHover.containsMouse
+                // The × sits above the row, so its own hover has to count or the
+                // row's leave hides it and the spinner flips it back.
+                visible: convHover.containsMouse || delHover.containsMouse
                 width: visible ? implicitWidth : 0
                 text: "×"
                 color: delHover.containsMouse ? Theme.danger : Theme.muted
