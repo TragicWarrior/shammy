@@ -1,4 +1,5 @@
 #include "controllers/ChatController.h"
+#include "controllers/ChatListWheel.h"
 #include "controllers/McpController.h"
 #include "controllers/ProjectController.h"
 #include "controllers/SettingsController.h"
@@ -156,6 +157,9 @@ int main(int argc, char *argv[])
     ClaudeImporter claudeImport(&projects, &store, &settings);
     McpController mcp(&mcpHost, &store);
     ChatController chat(&store, &openai, &mcp, &projects, &settings);
+
+    // ChatView imports this to speed up wheel and touchpad scrolling.
+    ChatListWheel::registerType();
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("chat"), &chat);

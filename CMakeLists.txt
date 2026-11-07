@@ -94,6 +94,8 @@ set(APP_SOURCES
     src/controllers/ProjectController.h
     src/controllers/McpController.cpp
     src/controllers/McpController.h
+    src/controllers/ChatListWheel.cpp
+    src/controllers/ChatListWheel.h
     src/models/MessageListModel.cpp
     src/models/MessageListModel.h
     src/models/ConversationListModel.cpp

@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import Shammy.Wheel 1.0
 
 Item {
     id: root
@@ -14,6 +15,11 @@ Item {
         boundsBehavior: Flickable.StopAtBounds
         interactive: true
         flickDeceleration: 1500
+        // Wheel and two-finger touchpad scrolls move ChatListWheel.kScale
+        // times Qt's step. The list still handles the event, so `moving`
+        // stays what the pin calls a user scroll.
+        ChatListWheel {
+        }
         // Page keys scroll only when the list itself has focus. The composer
         // keeps focus while typing, so this does not steal those keys.
         Keys.onPressed: (event) => {
