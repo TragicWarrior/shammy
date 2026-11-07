@@ -53,6 +53,16 @@ add_dependencies(tests test_message_bubble)
 # Loads MessageBubble off the user's display.
 set_tests_properties(test_message_bubble PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(test_sidebar test_sidebar.cpp)
+target_link_libraries(test_sidebar PRIVATE shammy_core Qt6::Test Qt6::Quick Qt6::QuickControls2)
+target_include_directories(test_sidebar PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_sidebar PRIVATE
+    QML_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+add_test(NAME test_sidebar COMMAND test_sidebar)
+add_dependencies(tests test_sidebar)
+# Loads Sidebar off the user's display.
+set_tests_properties(test_sidebar PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Controller-level tests: the controllers and list models live in the app target
 # (next to the QML module), so build the few they need directly into each test.
 set(CONTROLLER_TEST_SOURCES
