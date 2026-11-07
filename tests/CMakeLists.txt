@@ -63,6 +63,16 @@ add_dependencies(tests test_sidebar)
 # Loads Sidebar off the user's display.
 set_tests_properties(test_sidebar PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(test_chat_scroll test_chat_scroll.cpp)
+target_link_libraries(test_chat_scroll PRIVATE shammy_core Qt6::Test Qt6::Quick Qt6::QuickControls2)
+target_include_directories(test_chat_scroll PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_chat_scroll PRIVATE
+    QML_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+add_test(NAME test_chat_scroll COMMAND test_chat_scroll)
+add_dependencies(tests test_chat_scroll)
+# Loads ChatView off the user's display.
+set_tests_properties(test_chat_scroll PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Controller-level tests: the controllers and list models live in the app target
 # (next to the QML module), so build the few they need directly into each test.
 set(CONTROLLER_TEST_SOURCES
