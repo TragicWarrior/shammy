@@ -255,18 +255,20 @@ Item {
             objectName: "row-" + index
             width: list.width
             height: bubble.height
+            // A reset that shrinks the model leaves the extra row in place
+            // until the view drops it. That row's roles are already undefined.
             MessageBubble {
                 id: bubble
                 width: Math.min(Theme.chatMaxWidth, list.width - 48)
                 anchors.horizontalCenter: parent.horizontalCenter
-                role: model.role
-                content: model.content
-                reasoning: model.reasoning
-                streaming: model.streaming
-                parts: model.parts
-                toolCalls: model.toolCalls
-                error: model.error
-                messageId: model.messageId
+                role: model.role ?? "assistant"
+                content: model.content ?? ""
+                reasoning: model.reasoning ?? ""
+                streaming: model.streaming ?? false
+                parts: model.parts ?? []
+                toolCalls: model.toolCalls ?? ""
+                error: model.error ?? ""
+                messageId: model.messageId ?? ""
             }
         }
 

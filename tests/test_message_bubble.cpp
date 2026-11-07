@@ -1,9 +1,15 @@
 #include <QDir>
 #include <QFile>
+#include <QImage>
+#include <QImageWriter>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
+#include <QQuickItem>
+#include <QQuickWindow>
+#include <QRegularExpression>
 #include <QTemporaryDir>
+#include <QUrl>
 #include <QtTest>
 
 #include <memory>
@@ -36,6 +42,8 @@ class StubChat : public QObject
     Q_PROPERTY(bool streaming READ streaming WRITE setStreaming NOTIFY changed)
     Q_PROPERTY(int imageRevision READ imageRevision WRITE setImageRevision NOTIFY changed)
     Q_PROPERTY(bool imageUpscaleRunning READ imageUpscaleRunning WRITE setImageUpscaleRunning
+               NOTIFY changed)
+    Q_PROPERTY(int imageUpscaleScale READ imageUpscaleScale WRITE setImageUpscaleScale
                NOTIFY changed)
     Q_PROPERTY(QString imageActivity READ imageActivity WRITE setImageActivity NOTIFY changed)
     Q_PROPERTY(QString imageActivityJobId READ imageActivityJobId WRITE setImageActivityJobId
@@ -73,6 +81,13 @@ public:
         m_imageUpscaleRunning = v;
         emit changed();
     }
+    int imageUpscaleScale() const { return m_imageUpscaleScale; }
+    void setImageUpscaleScale(int v)
+    {
+        m_imageUpscaleScale = v;
+        emit changed();
+    }
+    void setImageFile(const QString &path) { m_imageFile = path; }
     QString imageActivity() const { return m_imageActivity; }
     void setImageActivity(const QString &s)
     {
@@ -90,6 +105,12 @@ public:
     // Tool bubbles ask for the image record. Keyed off the tool text.
     Q_INVOKABLE QVariantMap imageForMessage(const QString &content) const
     {
+        // A full record, including the fields an empty map leaves undefined.
+        if (content.contains(QLatin1String("job-img"))
+            || content.contains(QLatin1String("job-up")))
+        {
+            return fullImage(content.contains(QLatin1String("job-up")));
+        }
         QVariantMap m;
         const QString job = content.contains(QLatin1String("job-a"))
                                 ? QStringLiteral("job-a")
@@ -105,19 +126,66 @@ public:
         m.insert(QStringLiteral("height"), 8);
         return m;
     }
-    Q_INVOKABLE QVariantList artifactsForMessage(const QString &) const { return {}; }
+    Q_INVOKABLE QVariantList artifactsForMessage(const QString &id) const
+    {
+        if (id != QLatin1String("stored"))
+        {
+            return {};
+        }
+        QVariantMap p;
+        p.insert(QStringLiteral("type"), QStringLiteral("artifact"));
+        p.insert(QStringLiteral("text"), QStringLiteral("<p>stored body</p>"));
+        p.insert(QStringLiteral("language"), QStringLiteral("html"));
+        p.insert(QStringLiteral("identifier"), QStringLiteral("stored1"));
+        p.insert(QStringLiteral("title"), QStringLiteral("Stored card"));
+        p.insert(QStringLiteral("mime"), QStringLiteral("text/html"));
+        return {p};
+    }
 
 signals:
     void changed();
 
 private:
+    // The map MessageBubble reads for a generated image and one upscale row.
+    QVariantMap fullImage(bool upscale) const
+    {
+        QVariantMap m;
+        m.insert(QStringLiteral("jobId"),
+                 upscale ? QStringLiteral("job-up") : QStringLiteral("job-img"));
+        m.insert(QStringLiteral("path"), m_imageFile);
+        m.insert(QStringLiteral("url"), QUrl::fromLocalFile(m_imageFile).toString());
+        m.insert(QStringLiteral("prompt"), QStringLiteral("a small scene"));
+        m.insert(QStringLiteral("width"), 1344);
+        m.insert(QStringLiteral("height"), 768);
+        m.insert(QStringLiteral("offerScale2"), !upscale);
+        m.insert(QStringLiteral("offerScale4"), !upscale);
+        QVariantList rows;
+        if (upscale)
+        {
+            QVariantMap row;
+            row.insert(QStringLiteral("path"), m_imageFile);
+            row.insert(QStringLiteral("url"), QUrl::fromLocalFile(m_imageFile).toString());
+            row.insert(QStringLiteral("prompt"), QStringLiteral("upscaled"));
+            row.insert(QStringLiteral("width"), 800);
+            row.insert(QStringLiteral("height"), 800);
+            row.insert(QStringLiteral("jobId"), QStringLiteral("job-up-2"));
+            row.insert(QStringLiteral("scale"), 2);
+            row.insert(QStringLiteral("label"), QStringLiteral("2× · 800×800"));
+            rows.append(row);
+        }
+        m.insert(QStringLiteral("upscales"), rows);
+        return m;
+    }
+
     QString m_toolActivity;
     QString m_toolActivityMessageId;
     bool m_streaming = false;
     int m_imageRevision = 0;
     bool m_imageUpscaleRunning = false;
+    int m_imageUpscaleScale = 0;
     QString m_imageActivity;
     QString m_imageActivityJobId;
+    QString m_imageFile;
 };
 
 // Settings the bubble reads while it builds its tree.
@@ -240,6 +308,217 @@ Item {
 }
 )qml";
 
+// Same strings the height probe laid out, so the numbers below stay meaningful.
+const char *kKinds = R"qml(
+import QtQuick
+import Shammy 1.0
+Column {
+    width: 640
+    spacing: 0
+    MessageBubble {
+        objectName: "plain"
+        width: 600
+        role: "user"
+        messageId: "plain"
+        content: "Hello from a plain bubble."
+        parts: [{type: "text", text: "Hello from a plain bubble.",
+                 language: "", identifier: "", title: "", mime: ""}]
+    }
+    MessageBubble {
+        objectName: "markdown"
+        width: 600
+        role: "assistant"
+        messageId: "markdown"
+        content: "title"
+        parts: [
+            {type: "text",
+             text: '# Title\n\nA paragraph with **bold** and enough words to wrap onto a second line in the bubble.',
+             language: "", identifier: "", title: "", mime: ""},
+            {type: "table",
+             text: '{"headers":["A","B","C"],"rows":[["1","2","3"],["4","5","6"],["7","8","9"]]}',
+             language: "table", identifier: "", title: "", mime: ""}
+        ]
+    }
+    MessageBubble {
+        objectName: "code"
+        width: 600
+        role: "assistant"
+        messageId: "code"
+        content: "code"
+        parts: [{type: "code", text: "int v = 0;\nv += 1;\nv += 1;\nv += 1;\n",
+                 language: "cpp", identifier: "", title: "", mime: ""}]
+    }
+    MessageBubble {
+        objectName: "artifact"
+        width: 600
+        role: "assistant"
+        messageId: "artifact"
+        content: "art"
+        parts: [{type: "artifact",
+                 text: "<h1>Hello</h1>\n<p>A short artifact body for the card.</p>",
+                 language: "html", identifier: "art1", title: "Demo card", mime: "text/html"}]
+    }
+    MessageBubble {
+        objectName: "stored"
+        width: 600
+        role: "assistant"
+        messageId: "stored"
+        content: "stored"
+        parts: [{type: "text", text: "See the stored card.",
+                 language: "", identifier: "", title: "", mime: ""}]
+    }
+    MessageBubble {
+        objectName: "tools"
+        width: 600
+        role: "assistant"
+        messageId: "tools"
+        content: "Used a search."
+        toolCalls: "[web_search][web_fetch]"
+        parts: [{type: "text", text: "Used a search.",
+                 language: "", identifier: "", title: "", mime: ""}]
+    }
+    MessageBubble {
+        objectName: "image"
+        width: 600
+        role: "tool"
+        messageId: "image"
+        content: "picture job-img"
+    }
+    MessageBubble {
+        objectName: "upscale"
+        width: 600
+        role: "tool"
+        messageId: "upscale"
+        content: "picture job-up"
+    }
+    MessageBubble {
+        objectName: "emptytool"
+        width: 600
+        role: "tool"
+        messageId: "emptytool"
+        content: "no picture here"
+    }
+    MessageBubble {
+        objectName: "stream"
+        width: 600
+        role: "assistant"
+        messageId: "stream"
+        streaming: true
+        content: "A streaming reply that is still growing token by token."
+    }
+    MessageBubble {
+        objectName: "textcomp"
+        width: 600
+        role: "assistant"
+        messageId: "textcomp"
+        streaming: true
+        content: ""
+        parts: [{type: "text", text: "Plain markdown part while the reply is still open.",
+                 language: "", identifier: "", title: "", mime: ""}]
+    }
+}
+)qml";
+
+// Which part the loader instantiated. The loader's height is the column space.
+QString loadedKind(QObject *loaded)
+{
+    if (!loaded)
+    {
+        return {};
+    }
+    const QMetaObject *mo = loaded->metaObject();
+    if (mo->indexOfProperty("artTitle") >= 0)
+    {
+        return QStringLiteral("artifact");
+    }
+    if (mo->indexOfProperty("json") >= 0 && mo->indexOfProperty("code") < 0)
+    {
+        return QStringLiteral("table");
+    }
+    if (mo->indexOfProperty("code") >= 0 && mo->indexOfProperty("language") >= 0)
+    {
+        return QStringLiteral("code");
+    }
+    // A QML file type is SelectableMarkdown_QMLTYPE_N, not QQuickTextEdit.
+    const QString cls = QString::fromLatin1(mo->className());
+    if (cls.contains(QLatin1String("TextEdit"))
+        || cls.contains(QLatin1String("SelectableMarkdown"))
+        || loaded->inherits("QQuickTextEdit"))
+    {
+        return QStringLiteral("selectable");
+    }
+    // textComp's root is a plain Item. Before the wrap it was a Text.
+    if (cls.startsWith(QLatin1String("QQuickItem"))
+        || (cls.contains(QLatin1String("QQuickText"))
+            && !cls.contains(QLatin1String("TextEdit"))))
+    {
+        return QStringLiteral("text");
+    }
+    return {};
+}
+
+// Repeater delegates sit on the visual tree, not always under findChildren.
+void collectItems(QQuickItem *item, QList<QQuickItem *> *out)
+{
+    if (!item)
+    {
+        return;
+    }
+    out->append(item);
+    const auto kids = item->childItems();
+    for (QQuickItem *kid : kids)
+    {
+        collectItems(kid, out);
+    }
+}
+
+QList<double> loaderHeights(QQuickItem *bubble, const QString &kind)
+{
+    QList<double> out;
+    QList<QQuickItem *> items;
+    collectItems(bubble, &items);
+    for (QQuickItem *item : items)
+    {
+        const QString cls = QString::fromLatin1(item->metaObject()->className());
+        if (!cls.contains(QLatin1String("Loader")))
+        {
+            continue;
+        }
+        QObject *loaded = item->property("item").value<QObject *>();
+        if (loadedKind(loaded) != kind)
+        {
+            continue;
+        }
+        out.append(item->height());
+    }
+    return out;
+}
+
+QList<double> visibleImageHeights(QQuickItem *bubble)
+{
+    QList<double> out;
+    QList<QQuickItem *> items;
+    collectItems(bubble, &items);
+    for (QQuickItem *item : items)
+    {
+        const QString cls = QString::fromLatin1(item->metaObject()->className());
+        if (!cls.contains(QLatin1String("QQuickImage")) || !item->isVisible())
+        {
+            continue;
+        }
+        if (item->height() > 1.0)
+        {
+            out.append(item->height());
+        }
+    }
+    return out;
+}
+
+bool nearPx(double actual, double expected)
+{
+    return qAbs(actual - expected) <= 1.0;
+}
+
 } // namespace
 
 class TestMessageBubble : public QObject
@@ -324,6 +603,129 @@ private slots:
         QCOMPARE(old->property("waitingOnTools").toBool(), false);
         QCOMPARE(upA->property("upscalingThis").toBool(), true);
         QCOMPARE(upB->property("upscalingThis").toBool(), false);
+    }
+
+    void partHeightsStayAndMessageBubbleIsQuiet()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString moduleDir = dir.filePath(QStringLiteral("Shammy"));
+        QVERIFY(prepareModule(moduleDir));
+
+        QImage img(32, 32, QImage::Format_RGB32);
+        img.fill(Qt::darkBlue);
+        const QString png = dir.filePath(QStringLiteral("img.png"));
+        QImageWriter writer(png, "png");
+        QVERIFY(writer.write(img));
+
+        StubChat chat;
+        chat.setImageFile(png);
+        chat.setImageRevision(1);
+        StubSettings settings;
+        settings.enableArtifacts = true;
+
+        // Only MessageBubble.qml. Font notices on macOS CI must not fail this.
+        QTest::failOnWarning(QRegularExpression(QStringLiteral("MessageBubble\\.qml")));
+
+        QQmlEngine engine;
+        engine.addImportPath(dir.path());
+        engine.rootContext()->setContextProperty(QStringLiteral("chat"), &chat);
+        engine.rootContext()->setContextProperty(QStringLiteral("settings"), &settings);
+        QQmlComponent component(&engine);
+        component.setData(QByteArray(kKinds), QUrl());
+        QVERIFY2(!component.isError(), qPrintable(component.errorString()));
+        std::unique_ptr<QObject> root(component.create());
+        QVERIFY2(root, qPrintable(component.errorString()));
+
+        auto *column = qobject_cast<QQuickItem *>(root.get());
+        QVERIFY(column);
+        QQuickWindow window;
+        window.resize(640, 4000);
+        column->setParentItem(window.contentItem());
+        window.show();
+        QTest::qWait(200);
+
+        auto bubble = [&](const char *name) {
+            return root->findChild<QQuickItem *>(QLatin1String(name));
+        };
+        QQuickItem *plain = bubble("plain");
+        QQuickItem *markdown = bubble("markdown");
+        QQuickItem *code = bubble("code");
+        QQuickItem *artifact = bubble("artifact");
+        QQuickItem *stored = bubble("stored");
+        QQuickItem *tools = bubble("tools");
+        QQuickItem *image = bubble("image");
+        QQuickItem *upscale = bubble("upscale");
+        QQuickItem *emptyTool = bubble("emptytool");
+        QQuickItem *stream = bubble("stream");
+        QQuickItem *textComp = bubble("textcomp");
+        QVERIFY(plain && markdown && code && artifact && stored && tools);
+        QVERIFY(image && upscale && emptyTool && stream && textComp);
+
+        // Heights measured offscreen on the bubble before this fix.
+        const auto plainText = loaderHeights(plain, QStringLiteral("selectable"));
+        QCOMPARE(plainText.size(), 1);
+        QVERIFY2(nearPx(plainText.at(0), 21.0), qPrintable(QString::number(plainText.at(0))));
+        QVERIFY(nearPx(plain->height(), 66.0));
+
+        const auto mdText = loaderHeights(markdown, QStringLiteral("selectable"));
+        const auto mdTable = loaderHeights(markdown, QStringLiteral("table"));
+        QCOMPARE(mdText.size(), 1);
+        QCOMPARE(mdTable.size(), 1);
+        QVERIFY(nearPx(mdText.at(0), 62.0));
+        QVERIFY(nearPx(mdTable.at(0), 122.0));
+        QVERIFY(nearPx(markdown->height(), 253.0));
+
+        const auto codeH = loaderHeights(code, QStringLiteral("code"));
+        QCOMPARE(codeH.size(), 1);
+        QVERIFY(nearPx(codeH.at(0), 125.0));
+        QVERIFY(nearPx(code->height(), 186.0));
+
+        const auto artH = loaderHeights(artifact, QStringLiteral("artifact"));
+        QCOMPARE(artH.size(), 1);
+        QVERIFY(nearPx(artH.at(0), 63.0));
+        QVERIFY(nearPx(artifact->height(), 124.0));
+
+        const auto storedText = loaderHeights(stored, QStringLiteral("selectable"));
+        const auto storedArt = loaderHeights(stored, QStringLiteral("artifact"));
+        QCOMPARE(storedText.size(), 1);
+        QCOMPARE(storedArt.size(), 1);
+        QVERIFY(nearPx(storedText.at(0), 21.0));
+        QVERIFY(nearPx(storedArt.at(0), 63.0));
+        QVERIFY(nearPx(stored->height(), 153.0));
+
+        const auto toolText = loaderHeights(tools, QStringLiteral("selectable"));
+        QCOMPARE(toolText.size(), 1);
+        QVERIFY(nearPx(toolText.at(0), 21.0));
+        QVERIFY(nearPx(tools->height(), 107.0));
+
+        const auto imageH = visibleImageHeights(image);
+        QCOMPARE(imageH.size(), 1);
+        QVERIFY(nearPx(imageH.at(0), 343.0));
+        QVERIFY(nearPx(image->height(), 414.0));
+
+        const auto upH = visibleImageHeights(upscale);
+        QCOMPARE(upH.size(), 2);
+        QVERIFY(nearPx(upH.at(0), 343.0));
+        QVERIFY(nearPx(upH.at(1), 600.0));
+        QVERIFY(nearPx(upscale->height(), 1066.0));
+
+        QCOMPARE(visibleImageHeights(emptyTool).size(), 0);
+        QVERIFY(nearPx(emptyTool->height(), 17.0));
+
+        const auto plainPart = loaderHeights(textComp, QStringLiteral("text"));
+        QCOMPARE(plainPart.size(), 1);
+        QVERIFY(nearPx(plainPart.at(0), 21.44));
+        QVERIFY(nearPx(textComp->height(), 83.44));
+
+        QVERIFY(nearPx(stream->height(), 92.45));
+        for (int i = 0; i < 8; ++i)
+        {
+            stream->setProperty("content",
+                                stream->property("content").toString() + QStringLiteral(" token"));
+            QTest::qWait(30);
+        }
+        QVERIFY(nearPx(stream->height(), 122.90));
     }
 };
 

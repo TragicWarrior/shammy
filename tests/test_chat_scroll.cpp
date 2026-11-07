@@ -9,6 +9,7 @@
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -450,6 +451,7 @@ class TestChatScroll : public QObject
     Q_OBJECT
 
 private slots:
+    void init();
     void initTestCase();
     void cleanupTestCase();
     void staysAtEndWhilePinned();
@@ -485,6 +487,13 @@ private:
     QQuickItem *m_list = nullptr;
     QQuickItem *m_bar = nullptr;
 };
+
+void TestChatScroll::init()
+{
+    // Delegate teardown names these files. A macOS font notice does not.
+    QTest::failOnWarning(QRegularExpression(
+        QStringLiteral("MessageBubble\\.qml|ChatView\\.qml")));
+}
 
 void TestChatScroll::initTestCase()
 {

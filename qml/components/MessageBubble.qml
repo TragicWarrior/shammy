@@ -39,7 +39,7 @@ Item {
     }
     readonly property bool hasImage: generatedImage.path !== undefined
     readonly property bool upscalingThis: chat.imageUpscaleRunning
-        && chat.imageActivityJobId === root.generatedImage.jobId
+        && chat.imageActivityJobId === (root.generatedImage.jobId ?? "")
     readonly property string waitCaption: {
         if (root.fetchingPage || (root.waitingOnTools && toolCalls.indexOf("web_fetch") !== -1))
             return "Fetching page…"
@@ -99,7 +99,9 @@ Item {
     }
 
     function isStoredArtifactPart(type, language) {
-        if (root.storedArtifacts.length === 0)
+        // A missing list must not throw on .length during delegate teardown.
+        const arts = root.storedArtifacts
+        if (!arts || arts.length === 0)
             return false
         if (type === "artifact")
             return true
@@ -262,10 +264,13 @@ Item {
                 model: {
                     if (root.isCompact || root.isTool)
                         return []
-                    const src = root.parts
+                    // parts is a var, so a dying row can set it to undefined.
+                    const src = root.parts ?? []
                     const out = []
                     for (let i = 0; i < src.length; ++i) {
                         const p = src[i]
+                        if (!p)
+                            continue
                         if (root.isStoredArtifactPart(p.type, p.language))
                             continue
                         out.push(p)
@@ -275,7 +280,9 @@ Item {
                 delegate: Loader {
                     required property var modelData
                     width: col.width
-                    height: item ? Math.max(item.implicitHeight, item.height) : 0
+                    // Loader writes this height onto the item, so reading
+                    // item.height back is a loop. implicitHeight is the content size.
+                    height: item ? item.implicitHeight : 0
                     property var part: modelData
                     property bool showOpen: modelData.type === "artifact"
                     sourceComponent: {
@@ -295,11 +302,14 @@ Item {
             }
 
             Repeater {
-                model: root.storedArtifacts
+                // Same teardown: the list binding must not be undefined.
+                model: root.storedArtifacts ?? []
                 delegate: Loader {
                     required property var modelData
                     width: col.width
-                    height: item ? Math.max(item.implicitHeight, item.height) : 0
+                    // Loader writes this height onto the item, so reading
+                    // item.height back is a loop. implicitHeight is the content size.
+                    height: item ? item.implicitHeight : 0
                     property var part: modelData
                     property bool showOpen: true
                     sourceComponent: artComp
@@ -315,10 +325,16 @@ Item {
                 Image {
                     id: chatImage
                     width: Math.min(parent.width, 640)
-                    height: root.generatedImage.width > 0
-                            ? Math.round(width * root.generatedImage.height / root.generatedImage.width)
-                            : 0
-                    source: root.generatedImage.url
+                    // An empty record omits width, height and url. Assigning
+                    // undefined to those typed properties warns on every bubble.
+                    height: {
+                        const w = root.generatedImage.width ?? 0
+                        const h = root.generatedImage.height ?? 0
+                        if (w <= 0)
+                            return 0
+                        return Math.round(width * h / w)
+                    }
+                    source: root.generatedImage.url ?? ""
                     fillMode: Image.PreserveAspectFit
                     asynchronous: true
                     sourceSize.width: 1280
@@ -338,18 +354,20 @@ Item {
                     active: false
                     sourceComponent: Component {
                         ImageViewer {
-                            path: root.generatedImage.path
-                            source: root.generatedImage.url
-                            prompt: root.generatedImage.prompt
-                            imageWidth: root.generatedImage.width
-                            imageHeight: root.generatedImage.height
+                            // Built only when the viewer opens. Same empty-record guard.
+                            path: root.generatedImage.path ?? ""
+                            source: root.generatedImage.url ?? ""
+                            prompt: root.generatedImage.prompt ?? ""
+                            imageWidth: root.generatedImage.width ?? 0
+                            imageHeight: root.generatedImage.height ?? 0
                         }
                     }
                 }
 
                 Text {
                     width: parent.width
-                    text: root.generatedImage.prompt
+                    // Text.text is a string. An empty record has no prompt.
+                    text: root.generatedImage.prompt ?? ""
                     color: Theme.muted
                     font.pixelSize: 12
                     wrapMode: Text.Wrap
@@ -358,7 +376,7 @@ Item {
                 Text {
                     // Same progress strings generation shows (queue, then Drawing…).
                     width: parent.width
-                    visible: chat.imageActivityJobId === root.generatedImage.jobId
+                    visible: chat.imageActivityJobId === (root.generatedImage.jobId ?? "")
                              && chat.imageActivity.length > 0
                     text: chat.imageActivity
                     color: Theme.muted
@@ -390,7 +408,7 @@ Item {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
-                                const ok = chat.copyImageToClipboard(root.generatedImage.path)
+                                const ok = chat.copyImageToClipboard(root.generatedImage.path ?? "")
                                 statusText.text = ok ? "Copied" : "Could not copy"
                                 statusText.visible = true
                                 statusTimer.start()
@@ -399,7 +417,7 @@ Item {
                     }
                     Text {
                         // Hide this factor once it is saved or currently running.
-                        visible: root.generatedImage.offerScale2 === true
+                        visible: (root.generatedImage.offerScale2 ?? false)
                             && !(root.upscalingThis && chat.imageUpscaleScale === 2)
                         text: "Upscale 2×"
                         color: Theme.muted
@@ -407,11 +425,11 @@ Item {
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: chat.upscaleImage(root.generatedImage.jobId, 2)
+                            onClicked: chat.upscaleImage(root.generatedImage.jobId ?? "", 2)
                         }
                     }
                     Text {
-                        visible: root.generatedImage.offerScale4 === true
+                        visible: (root.generatedImage.offerScale4 ?? false)
                             && !(root.upscalingThis && chat.imageUpscaleScale === 4)
                         text: "Upscale 4×"
                         color: Theme.muted
@@ -419,7 +437,7 @@ Item {
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: chat.upscaleImage(root.generatedImage.jobId, 4)
+                            onClicked: chat.upscaleImage(root.generatedImage.jobId ?? "", 4)
                         }
                     }
                     Text {
@@ -441,7 +459,7 @@ Item {
                     defaultSuffix: "png"
                     nameFilters: ["PNG image (*.png)"]
                     onAccepted: {
-                        const ok = chat.saveImageAs(root.generatedImage.path, selectedFile)
+                        const ok = chat.saveImageAs(root.generatedImage.path ?? "", selectedFile)
                         statusText.text = ok ? "Saved" : "Could not save"
                         statusText.visible = true
                         statusTimer.start()
@@ -450,7 +468,7 @@ Item {
 
                 // Each upscale stays under the original. No upscale buttons here.
                 Repeater {
-                    model: root.generatedImage.upscales || []
+                    model: root.generatedImage.upscales ?? []
                     delegate: Column {
                         id: upscaleRow
                         required property var modelData
@@ -459,18 +477,22 @@ Item {
 
                         Text {
                             width: parent.width
-                            text: upscaleRow.modelData.label
+                            text: upscaleRow.modelData.label ?? ""
                             color: Theme.muted
                             font.pixelSize: 12
                             wrapMode: Text.Wrap
                         }
                         Image {
                             width: Math.min(parent.width, 640)
-                            height: upscaleRow.modelData.width > 0
-                                    ? Math.round(width * upscaleRow.modelData.height
-                                                 / upscaleRow.modelData.width)
-                                    : 0
-                            source: upscaleRow.modelData.url
+                            // A row with no metadata must not divide or assign undefined.
+                            height: {
+                                const w = upscaleRow.modelData.width ?? 0
+                                const h = upscaleRow.modelData.height ?? 0
+                                if (w <= 0)
+                                    return 0
+                                return Math.round(width * h / w)
+                            }
+                            source: upscaleRow.modelData.url ?? ""
                             fillMode: Image.PreserveAspectFit
                             asynchronous: true
                             sourceSize.width: 1280
@@ -490,11 +512,11 @@ Item {
                             active: false
                             sourceComponent: Component {
                                 ImageViewer {
-                                    path: upscaleRow.modelData.path
-                                    source: upscaleRow.modelData.url
-                                    prompt: upscaleRow.modelData.prompt
-                                    imageWidth: upscaleRow.modelData.width
-                                    imageHeight: upscaleRow.modelData.height
+                                    path: upscaleRow.modelData.path ?? ""
+                                    source: upscaleRow.modelData.url ?? ""
+                                    prompt: upscaleRow.modelData.prompt ?? ""
+                                    imageWidth: upscaleRow.modelData.width ?? 0
+                                    imageHeight: upscaleRow.modelData.height ?? 0
                                 }
                             }
                         }
@@ -523,7 +545,7 @@ Item {
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: {
                                         const ok = chat.copyImageToClipboard(
-                                            upscaleRow.modelData.path)
+                                            upscaleRow.modelData.path ?? "")
                                         rowStatus.text = ok ? "Copied" : "Could not copy"
                                         rowStatus.visible = true
                                         rowStatusTimer.start()
@@ -548,7 +570,8 @@ Item {
                             defaultSuffix: "png"
                             nameFilters: ["PNG image (*.png)"]
                             onAccepted: {
-                                const ok = chat.saveImageAs(upscaleRow.modelData.path, selectedFile)
+                                const ok = chat.saveImageAs(
+                                    upscaleRow.modelData.path ?? "", selectedFile)
                                 rowStatus.text = ok ? "Saved" : "Could not save"
                                 rowStatus.visible = true
                                 rowStatusTimer.start()
@@ -669,14 +692,23 @@ Item {
 
     Component {
         id: textComp
-        Text {
+        Item {
             width: col.width
-            text: part && part.text ? part.text : ""
-            color: Theme.text
-            wrapMode: Text.Wrap
-            textFormat: Text.MarkdownText
-            font.pixelSize: 15
-            lineHeight: 1.45
+            // Text.implicitHeight follows the height Loader writes onto the
+            // Text when lineHeight is set, which loops. The Loader writes
+            // this wrapper's height instead, so the Text keeps its own size.
+            implicitHeight: label.implicitHeight
+            height: implicitHeight
+            Text {
+                id: label
+                width: parent.width
+                text: part && part.text ? part.text : ""
+                color: Theme.text
+                wrapMode: Text.Wrap
+                textFormat: Text.MarkdownText
+                font.pixelSize: 15
+                lineHeight: 1.45
+            }
         }
     }
     Component {
