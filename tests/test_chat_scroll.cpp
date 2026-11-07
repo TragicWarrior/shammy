@@ -746,7 +746,9 @@ void TestChatScroll::wheel(QPoint angle)
     // Over the messages, not the bar, so the list takes the wheel.
     const QPoint pos(m_window->width() / 2, m_window->height() / 2);
     QTest::wheelEvent(m_window.get(), pos, angle);
-    QTest::qWait(40);
+    // A wheel step animates for about 300 ms, which a slow runner (macOS CI)
+    // does not finish within a fixed short wait. Callers read the settled view.
+    QVERIFY(waitSettled());
 }
 
 bool TestChatScroll::dragToEnd()
@@ -844,9 +846,6 @@ void TestChatScroll::eachInputUnpinsAndThenHolds()
     {
         wheel(QPoint(0, -240));
     }
-    // A wheel step animates for about 300 ms (longer than wheel()'s wait on a
-    // slow runner), so let it finish before recording where the view is.
-    QVERIFY(waitSettled());
     QVERIFY2(qAbs(contentY() - wheeled) > 1.0, "wheel did not scroll");
     QVERIFY(!atEnd());
     QVERIFY(!pinned());
