@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import Shammy.Wheel 1.0
 
 Item {
     id: root
@@ -14,6 +15,11 @@ Item {
         boundsBehavior: Flickable.StopAtBounds
         interactive: true
         flickDeceleration: 1500
+        // Wheel and two-finger touchpad scrolls move ChatListWheel.kScale
+        // times Qt's step. The list still handles the event, so `moving`
+        // stays what the pin calls a user scroll.
+        ChatListWheel {
+        }
         // Page keys scroll only when the list itself has focus. The composer
         // keeps focus while typing, so this does not steal those keys.
         Keys.onPressed: (event) => {
@@ -255,18 +261,20 @@ Item {
             objectName: "row-" + index
             width: list.width
             height: bubble.height
+            // A reset that shrinks the model leaves the extra row in place
+            // until the view drops it. That row's roles are already undefined.
             MessageBubble {
                 id: bubble
                 width: Math.min(Theme.chatMaxWidth, list.width - 48)
                 anchors.horizontalCenter: parent.horizontalCenter
-                role: model.role
-                content: model.content
-                reasoning: model.reasoning
-                streaming: model.streaming
-                parts: model.parts
-                toolCalls: model.toolCalls
-                error: model.error
-                messageId: model.messageId
+                role: model.role ?? "assistant"
+                content: model.content ?? ""
+                reasoning: model.reasoning ?? ""
+                streaming: model.streaming ?? false
+                parts: model.parts ?? []
+                toolCalls: model.toolCalls ?? ""
+                error: model.error ?? ""
+                messageId: model.messageId ?? ""
             }
         }
 

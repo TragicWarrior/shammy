@@ -1,3 +1,6 @@
+#include "controllers/ChatListWheel.h"
+
+#include <QDateTime>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -9,7 +12,9 @@
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QRegularExpression>
 #include <QTemporaryDir>
+#include <QWheelEvent>
 #include <QtTest>
 
 #include <algorithm>
@@ -450,6 +455,7 @@ class TestChatScroll : public QObject
     Q_OBJECT
 
 private slots:
+    void init();
     void initTestCase();
     void cleanupTestCase();
     void staysAtEndWhilePinned();
@@ -457,6 +463,7 @@ private slots:
     void eachInputUnpinsAndThenHolds();
     void growthAboveDoesNotShiftTheViewport();
     void repinsWhenBroughtBackToTheEnd();
+    void wheelAndTouchpadScrollFaster();
 
 private:
     // Fresh conversation, pinned on the end.
@@ -475,6 +482,11 @@ private:
     DragResult dragGrip(int steps, int dy, bool append);
     void wheel(QPoint angle);
     bool dragToEnd();
+    // True once the list has stopped moving for three polls in a row.
+    bool waitSettled();
+    // Sends one wheel event straight to the list, with a fresh timestamp.
+    void deliverWheel(QPoint angle, QPoint pixel, Qt::ScrollPhase phase,
+                      Qt::MouseEventSource source);
 
     Rows m_rows;
     StubChat m_chat{&m_rows};
@@ -486,6 +498,13 @@ private:
     QQuickItem *m_bar = nullptr;
 };
 
+void TestChatScroll::init()
+{
+    // Delegate teardown names these files. A macOS font notice does not.
+    QTest::failOnWarning(QRegularExpression(
+        QStringLiteral("MessageBubble\\.qml|ChatView\\.qml")));
+}
+
 void TestChatScroll::initTestCase()
 {
     QVERIFY(m_dir.isValid());
@@ -496,6 +515,8 @@ void TestChatScroll::initTestCase()
 
     const QString module = m_dir.filePath(QStringLiteral("Shammy"));
     QVERIFY(prepareModule(module));
+    // Same registration main() does before loading ChatView.
+    ChatListWheel::registerType();
     m_engine = std::make_unique<QQmlEngine>();
     m_engine->addImportPath(m_dir.path());
     m_engine->rootContext()->setContextProperty(QStringLiteral("chat"), &m_chat);
@@ -725,7 +746,9 @@ void TestChatScroll::wheel(QPoint angle)
     // Over the messages, not the bar, so the list takes the wheel.
     const QPoint pos(m_window->width() / 2, m_window->height() / 2);
     QTest::wheelEvent(m_window.get(), pos, angle);
-    QTest::qWait(40);
+    // A wheel step animates for about 300 ms, which a slow runner (macOS CI)
+    // does not finish within a fixed short wait. Callers read the settled view.
+    QVERIFY(waitSettled());
 }
 
 bool TestChatScroll::dragToEnd()
@@ -771,7 +794,13 @@ void TestChatScroll::staysAtEndWhilePinned()
         QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
     }
     QTest::qWait(60);
-    QVERIFY2(atEnd(), qPrintable(QStringLiteral("stream left gap %1").arg(endGap())));
+    QVERIFY2(atEnd(), qPrintable(QStringLiteral("stream left gap %1 (contentY %2, height %3, "
+                                                "originY %4, pinned %5)")
+                                     .arg(endGap())
+                                     .arg(contentY())
+                                     .arg(m_list->property("contentHeight").toDouble())
+                                     .arg(m_list->property("originY").toDouble())
+                                     .arg(pinned())));
     QVERIFY(pinned());
 }
 
@@ -1000,6 +1029,84 @@ void TestChatScroll::repinsWhenBroughtBackToTheEnd()
     QVERIFY(dragGrip(8, 8, false).pressed);
     m_rows.setAll(makeRows());
     QVERIFY2(waitReady(), "model reset did not re-pin");
+}
+
+bool TestChatScroll::waitSettled()
+{
+    // Give the wheel timeline a frame, then require three quiet polls so a
+    // late fixup is not mistaken for the end of the motion.
+    QTest::qWait(20);
+    double prev = contentY();
+    int quiet = 0;
+    return waitUntil([this, &prev, &quiet]() {
+        const double y = contentY();
+        const bool moving = m_list->property("moving").toBool();
+        const bool flicking = m_list->property("flicking").toBool();
+        if (!moving && !flicking && std::abs(y - prev) < 0.05)
+        {
+            ++quiet;
+        }
+        else
+        {
+            quiet = 0;
+        }
+        prev = y;
+        return quiet >= 3;
+    }, 2000);
+}
+
+void TestChatScroll::deliverWheel(QPoint angle, QPoint pixel, Qt::ScrollPhase phase,
+                                  Qt::MouseEventSource source)
+{
+    // Sent to the list so the source and phase can be set. Event filters on
+    // the list (ChatListWheel) still run.
+    const QPointF pos(m_list->width() / 2.0, m_list->height() / 2.0);
+    const QPointF global = m_list->mapToGlobal(pos);
+    QWheelEvent event(pos, global, pixel, angle, Qt::NoButton, Qt::NoModifier, phase,
+                      false, source);
+    // Flickable drops a wheel event whose timestamp is not after the last one.
+    static quint64 extra = 0;
+    extra += 1000;
+    event.setTimestamp(quint64(QDateTime::currentMSecsSinceEpoch()) + extra);
+    QCoreApplication::sendEvent(m_list, &event);
+    QCoreApplication::processEvents();
+}
+
+void TestChatScroll::wheelAndTouchpadScrollFaster()
+{
+    // Qt's wheel step on this path is angle / 120 * wheelScrollLines (3) * 24
+    // px. ChatListWheel scales the angle by kScale, so each case below moves
+    // 0.6 * round(angle * kScale) px instead of 0.6 * angle.
+    const auto expected = [](int angle) {
+        return 0.6 * std::lround(angle * ChatListWheel::kScale);
+    };
+
+    // A two-finger touchpad scroll on X11, shaped like Bryan's log: no scroll
+    // phase, not synthesized, both deltas set. Unscaled it moved 51 px.
+    resetView();
+    double start = contentY();
+    deliverWheel(QPoint(0, 85), QPoint(0, 20), Qt::NoScrollPhase,
+                 Qt::MouseEventNotSynthesized);
+    QVERIFY(waitSettled());
+    double travel = start - contentY();
+    QVERIFY2(std::abs(travel - expected(85)) <= 1.0,
+             qPrintable(QStringLiteral("touchpad travel %1, want %2")
+                            .arg(travel)
+                            .arg(expected(85))));
+    QVERIFY(!pinned());
+
+    // A plain wheel notch. Unscaled it moved 72 px.
+    resetView();
+    start = contentY();
+    deliverWheel(QPoint(0, 120), QPoint(0, 0), Qt::NoScrollPhase,
+                 Qt::MouseEventNotSynthesized);
+    QVERIFY(waitSettled());
+    travel = start - contentY();
+    QVERIFY2(std::abs(travel - expected(120)) <= 1.0,
+             qPrintable(QStringLiteral("notch travel %1, want %2")
+                            .arg(travel)
+                            .arg(expected(120))));
+    QVERIFY(!pinned());
 }
 
 int main(int argc, char **argv)
