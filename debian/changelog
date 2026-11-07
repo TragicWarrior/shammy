@@ -1,3 +1,15 @@
+shammy (0.15.3-1) unstable; urgency=medium
+
+  * Chat scrolling is smooth when dragging the scrollbar grip. One rule now
+    decides whether the chat follows new output, whatever you scroll with,
+    and every message is laid out on open so the scrollbar maps the real
+    height. Growth above what you're reading no longer shifts it, and
+    Page Up/Down, Home and End work in the chat list.
+  * The close (x) button on a chat in the sidebar no longer flickers while
+    another chat is generating.
+
+ -- Bryan Christ <bryan.christ@gmail.com>  Sat, 07 Nov 2026 00:07:12 -0600
+
 shammy (0.15.2-1) unstable; urgency=medium
 
   * Generated images use 10 sampling steps, matching zimage-gw: a blind
