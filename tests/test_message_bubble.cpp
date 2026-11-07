@@ -494,6 +494,55 @@ QList<double> loaderHeights(QQuickItem *bubble, const QString &kind)
     return out;
 }
 
+// The height a loaded part's content wants. The plain-text part is an Item
+// wrapping a Text, so its content height is that Text's implicitHeight.
+double contentHeight(QQuickItem *loaded)
+{
+    if (loaded->implicitHeight() <= 0.0)
+    {
+        const auto kids = loaded->childItems();
+        if (!kids.isEmpty())
+        {
+            return kids.first()->implicitHeight();
+        }
+    }
+    return loaded->implicitHeight();
+}
+
+// Font-independent check: every part Loader in the bubble is exactly as tall
+// as its content (±1 px) and not empty. Returns the summed loader height, or
+// -1 on a mismatch, with the mismatch described in *why.
+double checkLoaders(QQuickItem *bubble, QString *why)
+{
+    double sum = 0.0;
+    QList<QQuickItem *> items;
+    collectItems(bubble, &items);
+    for (QQuickItem *item : items)
+    {
+        const QString cls = QString::fromLatin1(item->metaObject()->className());
+        if (!cls.contains(QLatin1String("Loader")))
+        {
+            continue;
+        }
+        auto *loaded = qobject_cast<QQuickItem *>(item->property("item").value<QObject *>());
+        if (!loaded || loadedKind(loaded).isEmpty())
+        {
+            continue;
+        }
+        const double want = contentHeight(loaded);
+        if (want <= 0.0 || qAbs(item->height() - want) > 1.0)
+        {
+            *why = QStringLiteral("%1 loader %2, content %3")
+                       .arg(loadedKind(loaded))
+                       .arg(item->height())
+                       .arg(want);
+            return -1.0;
+        }
+        sum += item->height();
+    }
+    return sum;
+}
+
 QList<double> visibleImageHeights(QQuickItem *bubble)
 {
     QList<double> out;
@@ -662,70 +711,60 @@ private slots:
         QVERIFY(plain && markdown && code && artifact && stored && tools);
         QVERIFY(image && upscale && emptyTool && stream && textComp);
 
-        // Heights measured offscreen on the bubble before this fix.
-        const auto plainText = loaderHeights(plain, QStringLiteral("selectable"));
-        QCOMPARE(plainText.size(), 1);
-        QVERIFY2(nearPx(plainText.at(0), 21.0), qPrintable(QString::number(plainText.at(0))));
-        QVERIFY(nearPx(plain->height(), 66.0));
+        // Text heights depend on the platform's fonts (a line is 21 px on
+        // Linux, 18 on macOS), so text parts are checked against their own
+        // content rather than fixed numbers. Each bubble must hold its parts.
+        const auto partsFit = [](QQuickItem *b, int parts) {
+            QString why;
+            const double sum = checkLoaders(b, &why);
+            QVERIFY2(sum >= 0.0, qPrintable(b->objectName() + QStringLiteral(": ") + why));
+            QVERIFY2(sum > 0.0 || parts == 0, qPrintable(b->objectName()));
+            QVERIFY2(b->height() + 1.0 >= sum, qPrintable(b->objectName()));
+        };
+        partsFit(plain, 1);
+        partsFit(markdown, 2);
+        partsFit(code, 1);
+        partsFit(artifact, 1);
+        partsFit(stored, 2);
+        partsFit(tools, 1);
+        partsFit(textComp, 1);
+        if (QTest::currentTestFailed())
+        {
+            return;
+        }
+        QCOMPARE(loaderHeights(plain, QStringLiteral("selectable")).size(), 1);
+        QCOMPARE(loaderHeights(markdown, QStringLiteral("table")).size(), 1);
+        QCOMPARE(loaderHeights(code, QStringLiteral("code")).size(), 1);
+        QCOMPARE(loaderHeights(artifact, QStringLiteral("artifact")).size(), 1);
+        QCOMPARE(loaderHeights(stored, QStringLiteral("artifact")).size(), 1);
+        QCOMPARE(loaderHeights(textComp, QStringLiteral("text")).size(), 1);
 
-        const auto mdText = loaderHeights(markdown, QStringLiteral("selectable"));
-        const auto mdTable = loaderHeights(markdown, QStringLiteral("table"));
-        QCOMPARE(mdText.size(), 1);
-        QCOMPARE(mdTable.size(), 1);
-        QVERIFY(nearPx(mdText.at(0), 62.0));
-        QVERIFY(nearPx(mdTable.at(0), 122.0));
-        QVERIFY(nearPx(markdown->height(), 253.0));
-
-        const auto codeH = loaderHeights(code, QStringLiteral("code"));
-        QCOMPARE(codeH.size(), 1);
-        QVERIFY(nearPx(codeH.at(0), 125.0));
-        QVERIFY(nearPx(code->height(), 186.0));
-
-        const auto artH = loaderHeights(artifact, QStringLiteral("artifact"));
-        QCOMPARE(artH.size(), 1);
-        QVERIFY(nearPx(artH.at(0), 63.0));
-        QVERIFY(nearPx(artifact->height(), 124.0));
-
-        const auto storedText = loaderHeights(stored, QStringLiteral("selectable"));
-        const auto storedArt = loaderHeights(stored, QStringLiteral("artifact"));
-        QCOMPARE(storedText.size(), 1);
-        QCOMPARE(storedArt.size(), 1);
-        QVERIFY(nearPx(storedText.at(0), 21.0));
-        QVERIFY(nearPx(storedArt.at(0), 63.0));
-        QVERIFY(nearPx(stored->height(), 153.0));
-
-        const auto toolText = loaderHeights(tools, QStringLiteral("selectable"));
-        QCOMPARE(toolText.size(), 1);
-        QVERIFY(nearPx(toolText.at(0), 21.0));
-        QVERIFY(nearPx(tools->height(), 107.0));
-
+        // Image heights come from width and aspect only, so they are fixed:
+        // a 1344x768 image in a 600 px column is 343, an 800x800 upscale 600.
         const auto imageH = visibleImageHeights(image);
         QCOMPARE(imageH.size(), 1);
         QVERIFY(nearPx(imageH.at(0), 343.0));
-        QVERIFY(nearPx(image->height(), 414.0));
+        QVERIFY(image->height() > imageH.at(0));
 
         const auto upH = visibleImageHeights(upscale);
         QCOMPARE(upH.size(), 2);
         QVERIFY(nearPx(upH.at(0), 343.0));
         QVERIFY(nearPx(upH.at(1), 600.0));
-        QVERIFY(nearPx(upscale->height(), 1066.0));
+        QVERIFY(upscale->height() > upH.at(0) + upH.at(1));
 
+        // A tool message without an image shows no image row.
         QCOMPARE(visibleImageHeights(emptyTool).size(), 0);
-        QVERIFY(nearPx(emptyTool->height(), 17.0));
 
-        const auto plainPart = loaderHeights(textComp, QStringLiteral("text"));
-        QCOMPARE(plainPart.size(), 1);
-        QVERIFY(nearPx(plainPart.at(0), 21.44));
-        QVERIFY(nearPx(textComp->height(), 83.44));
-
-        QVERIFY(nearPx(stream->height(), 92.45));
+        // Streaming tokens make the bubble grow.
+        const double streamStart = stream->height();
+        QVERIFY(streamStart > 0.0);
         for (int i = 0; i < 8; ++i)
         {
             stream->setProperty("content",
                                 stream->property("content").toString() + QStringLiteral(" token"));
             QTest::qWait(30);
         }
-        QVERIFY(nearPx(stream->height(), 122.90));
+        QVERIFY(stream->height() > streamStart);
     }
 };
 

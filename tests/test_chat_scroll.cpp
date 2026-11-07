@@ -792,7 +792,13 @@ void TestChatScroll::staysAtEndWhilePinned()
         QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
     }
     QTest::qWait(60);
-    QVERIFY2(atEnd(), qPrintable(QStringLiteral("stream left gap %1").arg(endGap())));
+    QVERIFY2(atEnd(), qPrintable(QStringLiteral("stream left gap %1 (contentY %2, height %3, "
+                                                "originY %4, pinned %5)")
+                                     .arg(endGap())
+                                     .arg(contentY())
+                                     .arg(m_list->property("contentHeight").toDouble())
+                                     .arg(m_list->property("originY").toDouble())
+                                     .arg(pinned())));
     QVERIFY(pinned());
 }
 
@@ -838,6 +844,9 @@ void TestChatScroll::eachInputUnpinsAndThenHolds()
     {
         wheel(QPoint(0, -240));
     }
+    // A wheel step animates for about 300 ms (longer than wheel()'s wait on a
+    // slow runner), so let it finish before recording where the view is.
+    QVERIFY(waitSettled());
     QVERIFY2(qAbs(contentY() - wheeled) > 1.0, "wheel did not scroll");
     QVERIFY(!atEnd());
     QVERIFY(!pinned());
