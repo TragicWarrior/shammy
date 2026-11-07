@@ -1,3 +1,13 @@
+shammy (0.15.4-1) unstable; urgency=medium
+
+  * The chat scrolls 1.75 times as far per mouse-wheel notch or two-finger
+    touchpad swipe. Only the chat list changes; the sidebar and other lists
+    keep their speed.
+  * Chat bubbles no longer print QML warnings (binding loops, undefined
+    image fields, and a TypeError when a chat reloads with fewer messages).
+
+ -- Bryan Christ <bryan.christ@gmail.com>  Sat, 07 Nov 2026 11:46:48 -0600
+
 shammy (0.15.3-1) unstable; urgency=medium
 
   * Chat scrolling is smooth when dragging the scrollbar grip. One rule now
