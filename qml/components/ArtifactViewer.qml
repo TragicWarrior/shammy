@@ -100,7 +100,10 @@ Item {
                 color: Theme.muted
                 font.pixelSize: 13
                 text: {
-                    const err = previewLoader.errorString
+                    // Loader has no errorString. The value is undefined while
+                    // the preview is idle and when a load fails, and indexOf
+                    // on that throws. A real string still selects the hint.
+                    const err = String(previewLoader.errorString ?? "")
                     if (err.indexOf("QtWebEngine") >= 0)
                         return "The Qt 6 WebEngine QML module is missing. On Debian/Ubuntu:\n\nsudo apt-get install qml6-module-qtwebengine\n\nThen restart Shammy."
                     return err

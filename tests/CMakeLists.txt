@@ -63,6 +63,17 @@ add_dependencies(tests test_sidebar)
 # Loads Sidebar off the user's display.
 set_tests_properties(test_sidebar PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(test_artifact_viewer test_artifact_viewer.cpp)
+target_link_libraries(test_artifact_viewer PRIVATE
+    shammy_core Qt6::Test Qt6::Quick Qt6::QuickControls2)
+target_include_directories(test_artifact_viewer PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_artifact_viewer PRIVATE
+    QML_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+add_test(NAME test_artifact_viewer COMMAND test_artifact_viewer)
+add_dependencies(tests test_artifact_viewer)
+# Loads ArtifactViewer off the user's display.
+set_tests_properties(test_artifact_viewer PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(test_chat_scroll test_chat_scroll.cpp
     ${CMAKE_SOURCE_DIR}/src/controllers/ChatListWheel.cpp)
 target_link_libraries(test_chat_scroll PRIVATE shammy_core Qt6::Test Qt6::Quick Qt6::QuickControls2)
