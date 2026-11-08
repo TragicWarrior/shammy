@@ -2,6 +2,7 @@
 #include "Util.h"
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QSet>
@@ -559,6 +560,45 @@ void Store::deleteConversation(const QString &id)
     q.addBindValue(id);
     q.exec();
     emit conversationsChanged();
+}
+
+// True if the SQLite file holds at least one chat or project. Files under
+// 1 KB cannot hold a table, so they are not opened.
+bool Store::hasUserData(const QString &path)
+{
+    if (!QFile::exists(path) || QFileInfo(path).size() < 1024)
+    {
+        return false;
+    }
+    const QString conn = QStringLiteral("shammy-migrate-check");
+    if (QSqlDatabase::contains(conn))
+    {
+        QSqlDatabase::removeDatabase(conn);
+    }
+    int n = 0;
+    // The database handle and its query live in this block only. Qt warns
+    // that the connection is "still in use" if either is alive when
+    // removeDatabase runs, so the block ends first.
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+        db.setDatabaseName(path);
+        if (db.open())
+        {
+            QSqlQuery q(db);
+            if (q.exec(QStringLiteral("SELECT COUNT(*) FROM conversations")) && q.next())
+            {
+                n += q.value(0).toInt();
+            }
+            if (q.exec(QStringLiteral("SELECT COUNT(*) FROM projects")) && q.next())
+            {
+                n += q.value(0).toInt();
+            }
+            q.finish();
+            db.close();
+        }
+    }
+    QSqlDatabase::removeDatabase(conn);
+    return n > 0;
 }
 
 // The words of a search as an FTS5 query: every word must be present, each as

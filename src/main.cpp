@@ -17,8 +17,6 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QScreen>
-#include <QSqlDatabase>
-#include <QSqlQuery>
 #include <QStandardPaths>
 #include <QWindow>
 
@@ -51,31 +49,6 @@ static void copyDir(const QString &from, const QString &to)
     }
 }
 
-static bool sqliteHasUserData(const QString &path)
-{
-    if (!QFile::exists(path) || QFileInfo(path).size() < 1024)
-        return false;
-    const QString conn = QStringLiteral("shammy-migrate-check");
-    if (QSqlDatabase::contains(conn))
-        QSqlDatabase::removeDatabase(conn);
-    QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
-    db.setDatabaseName(path);
-    if (!db.open())
-    {
-        QSqlDatabase::removeDatabase(conn);
-        return false;
-    }
-    int n = 0;
-    QSqlQuery q(db);
-    if (q.exec(QStringLiteral("SELECT COUNT(*) FROM conversations")) && q.next())
-        n += q.value(0).toInt();
-    if (q.exec(QStringLiteral("SELECT COUNT(*) FROM projects")) && q.next())
-        n += q.value(0).toInt();
-    db.close();
-    QSqlDatabase::removeDatabase(conn);
-    return n > 0;
-}
-
 static QString findLegacyLlamaChatDb()
 {
     const QString root = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
@@ -86,7 +59,7 @@ static QString findLegacyLlamaChatDb()
     };
     for (const QString &p : candidates)
     {
-        if (sqliteHasUserData(p))
+        if (Store::hasUserData(p))
             return p;
     }
     return {};
@@ -96,7 +69,7 @@ static void migrateFromLlamaChat()
 {
     const QString newData = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     const QString newDb = newData + QStringLiteral("/shammy.db");
-    if (sqliteHasUserData(newDb))
+    if (Store::hasUserData(newDb))
         return;
     const QString oldDb = findLegacyLlamaChatDb();
     if (oldDb.isEmpty())

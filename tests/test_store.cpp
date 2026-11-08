@@ -3,6 +3,7 @@
 
 #include <QSqlDatabase>
 #include <QSqlQuery>
+#include <QRegularExpression>
 #include <QSqlRecord>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -518,6 +519,39 @@ private slots:
             db.close();
         }
         QSqlDatabase::removeDatabase(conn);
+    }
+
+    // hasUserData counts chats and projects, and releases its connection
+    // without Qt's "connection ... is still in use" warning.
+    void hasUserDataIsQuiet()
+    {
+        QTest::failOnWarning(QRegularExpression(QStringLiteral("still in use")));
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        // A missing file and an empty database hold nothing.
+        QVERIFY(!Store::hasUserData(dir.path() + "/missing.db"));
+        const QString path = dir.path() + "/data.db";
+        {
+            Store store;
+            QVERIFY(store.open(path));
+        }
+        QVERIFY(!Store::hasUserData(path));
+
+        // One chat is enough.
+        {
+            Store store;
+            QVERIFY(store.open(path));
+            Conversation c;
+            c.id = newId();
+            c.title = QStringLiteral("kept");
+            c.createdAt = c.updatedAt = nowMs();
+            store.upsertConversation(c);
+        }
+        QVERIFY(Store::hasUserData(path));
+        // A second call reuses the connection name cleanly.
+        QVERIFY(Store::hasUserData(path));
+        QVERIFY(!QSqlDatabase::contains(QStringLiteral("shammy-migrate-check")));
     }
 };
 

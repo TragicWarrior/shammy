@@ -44,6 +44,10 @@ public:
     // of it (a word matches from its start). Pinned first, then newest.
     QList<Conversation> search(const QString &query) const;
     static QString ftsQuery(const QString &query);
+    // True if the SQLite file at path holds at least one chat or project.
+    // Opens it on a private connection and removes that connection before
+    // returning, so it can be called before or beside an open Store.
+    static bool hasUserData(const QString &path);
 
     QList<Message> messages(const QString &conversationId) const;
     void upsertMessage(const Message &m);
