@@ -122,6 +122,13 @@ class TestArtifactViewer : public QObject
     Q_OBJECT
 
 private slots:
+    // Use the app's Controls style (main.cpp sets Basic). The macOS native
+    // style warns about the custom backgrounds, which fails failOnWarning.
+    void initTestCase()
+    {
+        qputenv("QT_QUICK_CONTROLS_STYLE", QByteArray("Basic"));
+    }
+
     void startupDoesNotReadIndexOfOnUndefined()
     {
         QTest::failOnWarning(QRegularExpression(QStringLiteral("ArtifactViewer\\.qml")));

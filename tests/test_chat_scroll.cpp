@@ -793,7 +793,10 @@ void TestChatScroll::staysAtEndWhilePinned()
         m_rows.stream(QStringLiteral(" token"));
         QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
     }
-    QTest::qWait(60);
+    // Wait for the follow to catch up instead of a fixed delay: macOS CI
+    // re-lays out the grown rows later and was still 1960 px short at 60 ms,
+    // while pinned. A view that never reaches the end still fails here.
+    waitUntil([this]() { return atEnd(); });
     QVERIFY2(atEnd(), qPrintable(QStringLiteral("stream left gap %1 (contentY %2, height %3, "
                                                 "originY %4, pinned %5)")
                                      .arg(endGap())
