@@ -715,7 +715,13 @@ Rectangle {
                 // The × sits above the row, so its own hover has to count or the
                 // row's leave hides it and the spinner flips it back.
                 visible: convHover.containsMouse || delHover.containsMouse
-                width: visible ? implicitWidth : 0
+                // width used to be `visible ? implicitWidth : 0`. delHover fills
+                // this text, so that binding reads containsMouse while writing
+                // the width containsMouse depends on, and Qt reports a loop.
+                // The assignment keeps the same 0-or-glyph width.
+                width: 0
+                onVisibleChanged: width = visible ? implicitWidth : 0
+                onImplicitWidthChanged: if (visible) width = implicitWidth
                 text: "×"
                 color: delHover.containsMouse ? Theme.danger : Theme.muted
                 font.pixelSize: 16

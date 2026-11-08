@@ -8,6 +8,7 @@
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -350,9 +351,20 @@ class TestSidebar : public QObject
     Q_OBJECT
 
 private slots:
+    // Use the app's Controls style (main.cpp sets Basic). The macOS native
+    // style warns about the custom backgrounds, which fails failOnWarning.
+    void initTestCase()
+    {
+        qputenv("QT_QUICK_CONTROLS_STYLE", QByteArray("Basic"));
+    }
+
     // Pointer on another row's × while a chat generates: the × stays put.
     void closeStaysShownWhileAnotherChatGenerates()
     {
+        // The × width binding loops through its own hover area. macOS CI
+        // prints other warnings, so only this file fails the test.
+        QTest::failOnWarning(QRegularExpression(QStringLiteral("Sidebar\\.qml")));
+
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
         const QString moduleDir = dir.filePath(QStringLiteral("Shammy"));
@@ -403,7 +415,12 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(visibleSpinner(content) != nullptr, 1000);
 
         // Title side of the row, not the ×. The control should appear and stay.
+        // Hidden, the × takes no width, so the title reaches further right.
         QPointer<QQuickItem> rowWatch(row);
+        QQuickItem *closeBefore = findText(row, QStringLiteral("×"));
+        QVERIFY(closeBefore);
+        QVERIFY(closeBefore->width() < 1.0);
+        const qreal titleRightIdle = title->mapToItem(content, QPointF(title->width(), 0)).x();
         const QPoint titlePt = scenePoint(row, 24, row->height() / 2.0);
         QTest::mouseMove(window, titlePt);
         QTest::qWait(150);
@@ -411,6 +428,9 @@ private slots:
         QVERIFY2(closeItem, "close control did not appear on row hover");
         QVERIFY(closeItem->isVisible());
         QVERIFY(closeItem->width() > 1);
+        const qreal titleRightHot = title->mapToItem(content, QPointF(title->width(), 0)).x();
+        QVERIFY2(titleRightHot < titleRightIdle,
+                 "showing the × did not give the title back its trailing space");
 
         // Rest the pointer on the × itself for 800 ms.
         const QPoint closePt = scenePoint(closeItem, closeItem->width() / 2.0,
@@ -426,6 +446,20 @@ private slots:
         QVERIFY(!rowWatch.isNull());
         QCOMPARE(rowWatch.data(), row);
         QVERIFY(closeItem->isVisible());
+
+        // The × still opens the confirm dialog.
+        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, closePt);
+        QTRY_VERIFY(findText(content, QStringLiteral("Delete chat?")) != nullptr);
+        QQuickItem *cancel = findText(content, QStringLiteral("Cancel"));
+        QVERIFY(cancel);
+        const QPoint cancelPt = scenePoint(cancel, cancel->width() / 2.0, cancel->height() / 2.0);
+        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, cancelPt);
+        QQuickItem *heading = nullptr;
+        const auto dialogGone = [&]() {
+            heading = findText(content, QStringLiteral("Delete chat?"));
+            return heading == nullptr || !heading->isVisible();
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(dialogGone(), 1000);
 
         // Leaving the row hides the ×.
         QTest::mouseMove(window, QPoint(8, 8));
