@@ -1,3 +1,13 @@
+shammy (0.15.5-1) unstable; urgency=medium
+
+  * Startup no longer prints a TypeError from the artifact viewer or a
+    "connection 'shammy-migrate-check' is still in use" warning.
+  * The sidebar's close (x) button no longer reports a QML binding loop.
+  * Configuring the build against a shared Qt no longer prints a warning
+    for every QML plugin.
+
+ -- Bryan Christ <bryan.christ@gmail.com>  Sat, 07 Nov 2026 20:29:37 -0600
+
 shammy (0.15.4-1) unstable; urgency=medium
 
   * The chat scrolls 1.75 times as far per mouse-wheel notch or two-finger
