@@ -170,6 +170,13 @@ qt_add_qml_module(shammy
     RESOURCE_PREFIX /qt/qml
     QML_FILES ${QML_FILES}
 )
+# Skip Qt's QML import scan on a shared Qt. It only links QML plugins into the
+# binary for a static Qt; a shared Qt loads them at runtime, and on Ubuntu the
+# scan prints a "does not exist in the current scope" warning per plugin on
+# every reconfigure. This must follow qt_add_qml_module, which resets it.
+if(QT6_IS_SHARED_LIBS_BUILD)
+    set_target_properties(shammy PROPERTIES QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+endif()
 
 set(SHAMMY_ICON_PNGS
     resources/icons/shammy-16.png
